@@ -6,13 +6,16 @@ With Tidy you can use the Tidal Cycles syntax (functions and mininotation) direc
 My journey so far resulted in a few classes:
 - JSSamples: to easily manage my samples
 - JSMini: converts mininotation to a cycle of steps
-- Pmini: a pseudo pattern that delivers \dur, \str and \num keys to your Pbind, using a mininotation string as input.
+- Pmini: a pseudo pattern that delivers \dur, \str and \num keys to your Pbind, using mininotation as input.
 - JSTidy: hooks into ProxySpace / NodeProxy and enables the functions syntax almost like functions in Tidal Cycles. Only a few functions have yet been implemented.
+
+After attendeding the ICLC2023 in Utrecht i want to share this on GitHub.  
+Eventually it will become one Quark called "Tidy".
 
 ## Usage example
 
 ```
-// initialize:
+// start SuperCollider and then:
 
 "setup.scd".loadRelative
 
@@ -66,5 +69,5 @@ Pbindef(\x,
 
 ## Roadmap
 
-Current version v1.0.0 2023-04-25
+Current version v1.0.0, 2023-04-25
 
