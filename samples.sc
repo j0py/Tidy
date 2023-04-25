@@ -34,8 +34,6 @@ JSSamples {
 	}
 
 	*buf { |bank, index|
-    var size;
-
 		bank ?? { ^nil };
 		index ?? { ^nil };
 
