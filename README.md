@@ -9,7 +9,8 @@ My journey so far resulted in a few classes:
 - Pmini: a pseudo pattern that delivers \dur, \str and \num keys to your Pbind, using mininotation as input.
 - JSTidy: hooks into ProxySpace / NodeProxy and enables the functions syntax almost like functions in Tidal Cycles. Only a few functions have yet been implemented.
 
-I start each class with my initials ("JS") so as not to conflict with any other classnames. Pmini is an exception though, as patterns must start with a "P".
+I start each class with my initials ("JS") so as not to conflict with any other classnames.
+Pmini is an exception though, as patterns must start with a "P".
 
 After attendeding the ICLC2023 in Utrecht i want to share this on GitHub.  
 Eventually it will become one Quark called "Tidy".
