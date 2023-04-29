@@ -45,7 +45,7 @@ JSSamples {
 		bank = bank.asSymbol;
 		index = index.asInteger;
 
-		Library.at(\samples, bank) !? { ^nil };
+		Library.at(\samples, bank) ?? { ^nil };
 		if(Library.at(\samples, bank).size <= 0, { ^nil });
 
 		index = index % Library.at(\samples, bank).size;
