@@ -4,7 +4,7 @@ categories:: Part of the Tidy quark
 related:: Classes/JSTidy
 
 DESCRIPTION::
-Load as many folders containing banks of WAV samples in the global Library.
+Load folders containing banks of WAV samples in the global Library.
 
 Get the bufnum of a Buffer object in a simple way when you need it.
 
@@ -12,7 +12,7 @@ The structure on disk is like: folder / bank(s) / wav file(s).
 
 The folder is found using folder.resolveRelative.
 
-The structure in Library is like: \samples, \bank, index(es)
+The structure in Library is like: \samples, \bank(s), index(es)
 
 CLASSMETHODS::
 
@@ -20,17 +20,13 @@ METHOD:: load
 Loads all subfolders and the WAV samples within them into the Library.
 
 ARGUMENT:: folder
-The root folder containing banks with samples.
-
-returns:: nil
+The root folder containing banks (subfolders) with samples.
 
 METHOD:: log
-Posts all banks + amount of samples under each of them.
-
-returns:: nil
+Posts all banks + amount of samples inside each of them.
 
 METHOD:: buf
-Searches a loaded Buffer in the Library and returns it.
+Finds a sample in the Library and returns its Buffer object.
 
 ARGUMENT:: bank
 The bank under which the sample is stored.
@@ -38,10 +34,10 @@ The bank under which the sample is stored.
 ARGUMENT:: index
 The index (starting with 0) of the sample within the bank.
 
-returns:: the Buffer or nil
+returns:: a Buffer object or nil
 
 METHOD:: bufnum
-Searches a loaded Buffer in the Library and returns its bufnum.
+Finds a sample in the Library and returns its bufnum.
 
 ARGUMENT:: bank
 The bank under which the sample is stored.
@@ -66,5 +62,5 @@ assume:
 
 Samples.load("mysamples")
 Samples.log
-Samples.bufnum(\animal, \cat)
+Samples.bufnum(\animal, 1)
 ::
