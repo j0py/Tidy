@@ -1,0 +1,378 @@
+TITLE:: JSTidy
+summary:: Use TidalCycles syntax in SuperCollider's Interpreter
+categories:: Part of the Tidy quark
+related:: Classes/JSMini, Classes/JSSamples
+
+DESCRIPTION::
+Combining ProxySpace, JSMini (mininotation parser) and JSSamples with SuperCollider's Interpreter makes it possible to use almost equal syntax for specifying layers of sound and rhythm as in TidalCycles.
+
+code::
+~a < "buf 1 <2 4>/3*2" - "snd kit1" - "raw 0.2" - "room 0.1"
+::
+
+This would play buffer indexes 1,2,3,4 with some rhythm from the samples folder named "kit1" and send the audio to raw output with gain 0.2, and to the reverb input with gain 0.1.
+Re-evaluating this line of code (after changing numbers) will smoothly crossfade from the previous numbers to the new numbers at the next quantisation point.
+
+The following code is not possible in SuperCollider's Interpreter:
+
+code::
+~a < buf "1 <2 4>/3*2" - snd "kit1" - raw "0.2" - room "0.1"
+::
+
+The Interpreter does not know that "buf" is a function that we have defined (in a Class). For this reason, the name of the function is included as the first word in the String. The remainder of the string is the pattern. And then the Interpreter will accept the input:
+
+code::
+~a < "buf 1 <2 4>/3*2" - "snd kit1" - "raw 0.2" - "room 0.1"
+::
+
+The "<" operator is an extension on the NodeProxy class, resulting in a JSTidy object. The Interpreter works it's way from left to right, and so the "-" operator on the JSTidy object receives a String argument ("snd kit1"), does it's thing, and returns itself (a JSTidy object again). This continues until the end of the chain of operator/string combinations. At the end, the Interpreter will invoke method "printOn" on the JSTidy object, to enable it to send some info to the post window of SuperCollider. In the printOn() method, i start / replace a Routine that plays all the notes that should be played on this NodeProxy's bus.
+
+The "-" operator is actually the "|>" operator. In TidalCycles they use the "#" operator, but the Interpreter does not accept that char. All the other combining operators are as in TidalCycles: |>, |<, |>|, |+, |/, etc etc.
+
+The "$" operator from TidalCycles is also a no go within the Interpreter, and so that has been replaced by the "|" operator.
+
+code::
+~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 5 6" - "snd kit1" - "raw 0.5" - "comb 0.1"
+::
+
+First, the part after the "|" operator does its calculations, resulting in a cycle with 0 or more steps. And then this is input for the "off" function, which can do with it whatever it wants: add steps, copy them, shift them in time, anything. The result of that is finally played on the "~a" NodeProxy.
+
+(more to explain: slot numbers, making a mix)
+
+CLASSMETHODS::
+
+METHOD:: new
+(describe method here)
+
+ARGUMENT:: proxy
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: should_log
+(describe method here)
+
+ARGUMENT:: level
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: show
+(describe method here)
+
+ARGUMENT:: count
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: hush
+(describe method here)
+
+ARGUMENT:: index
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: log
+(describe method here)
+
+ARGUMENT:: level
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: stop
+(describe method here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: send
+(describe method here)
+
+ARGUMENT:: from
+(describe argument here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: fxnames
+(describe method here)
+
+returns:: (describe returnvalue here)
+
+
+INSTANCEMETHODS::
+
+METHOD:: <|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |*|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |<|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |>
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |/
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: func
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |+
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: >
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: add_func
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: >|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: +|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: +
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |*
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: /
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: /|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: doesNotUnderstand
+(describe method here)
+
+ARGUMENT:: selector
+(describe argument here)
+
+ARGUMENT::  ... args
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: *
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |/|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: proxy
+(describe method here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |+|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |%
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: printOn
+(describe method here)
+
+ARGUMENT:: stream
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: add
+(describe method here)
+
+ARGUMENT:: obj
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |<
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: %|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: <>
+(describe method here)
+
+ARGUMENT:: input
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: <
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: |>|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: -
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: %
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: add_branch
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+METHOD:: *|
+(describe method here)
+
+ARGUMENT:: str
+(describe argument here)
+
+returns:: (describe returnvalue here)
+
+
+EXAMPLES::
+
+code::
+(some example code)
+::
+
