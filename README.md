@@ -1,13 +1,13 @@
 # Tidy
 Tidal Cycles syntax for SuperCollider
 
-With Tidy you can use the Tidal Cycles syntax (functions and mininotation) directly inside the Interpreter of SuperCollider. I am a great fan of the syntax and "tidyness" of Tidal Cycles, but if i use something then i want to be able to dig into the source if i think i have found a bug. Also i like to be able to extend or improve it. I had a look at the Haskell language, but could not understand it easily and so decided to try and implement it in SuperCollider classes directly.
+With Tidy you can use the Tidal Cycles syntax (functions and mininotation) directly "inside" the Interpreter of SuperCollider. I am a great fan of the syntax and "tidyness" of Tidal Cycles and i want to use it together with NodeProxies in ProxySpace. The proxies create the "mix", and the cycles trigger the sounds.
 
-My journey so far resulted in a few classes:
-- JSSamples: to easily manage my samples
-- JSMini: converts mininotation to a cycle of steps
-- Pmini: a pseudo pattern that delivers \dur, \str and \num keys to your Pbind, using mininotation as input.
-- JSTidy: hooks into ProxySpace / NodeProxy and enables the functions syntax almost like functions in Tidal Cycles. Only a few functions have yet been implemented.
+My journey so far (05-2023) has resulted in a few classes:
+- JSSamples: easily manage samples
+- JSMini: convert mininotation to a cycle of steps
+- Pmini: a pseudo pattern that delivers \dur, \str and \num keys to a Pbind, using mininotation as input.
+- JSTidy: hooks into ProxySpace and enables a functions syntax almost like in Tidal Cycles. Only a few functions have yet been implemented; there's a lot of them!
 
 I start each class with my initials ("JS") so as not to conflict with any other classnames.  
 Pmini is an exception though, as patterns must start with a "P".
@@ -20,13 +20,13 @@ Eventually it will become one Quark called "Tidy".
 ```
 // start SuperCollider and then:
 
-"setup.scd".loadRelative
+s.boot
 
 JSSamples.load("samples")
 
 p = ProxySpace.push(s).config(70, 4)
 
-// set up a "mix" using proxies:
+// set up a "mixer" using proxies:
 
 ~out.play
 ~raw.fx { |in| in } > "out 1"
@@ -35,7 +35,7 @@ p = ProxySpace.push(s).config(70, 4)
 ~room.fx(\eliverb) > "raw 0.5"
 ~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 4]) > "raw 0.8"
 
-// start layers of sound:
+// trigger sounds, and send them to "inputs" of the mixer:
 
 ~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "raw 0.1" - "comb 0.01"
 
@@ -50,11 +50,13 @@ p.hush(8)
 
 ## Quark content:
 
-- samples.sc (explain, usage)
+- samples.sc (TODO: explain, usage)
 
-- mininotation.sc (explain, usage, features supported, inner working)
+- mini.sc (TODO: explain, usage, features supported, inner working)
 
-- pmini.sc (explain, usage)
+- tidy.sc (TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported)
+
+- pmini.sc (TODO: explain, usage)
 
 ### Usage:
 ```
@@ -67,8 +69,6 @@ Pbindef(\x,
 ).play;
 )
 ```
-
-- tidy.sc (explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported)
 
 ## Roadmap
 

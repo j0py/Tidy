@@ -236,8 +236,12 @@ JSTidyStep {
 			var index = (this.at(\buf) ? 0).asInteger;
 			var buf = Library.at(\samples, bank.asSymbol, index);
 
-			buf !? { 
-				this.put(\instrument, \playbuf);
+			buf !? {
+				if(buf.numChannels > 1) {
+					this.put(\instrument, \playbuf_stereo);
+				} {
+					this.put(\instrument, \playbuf_mono);
+				};
 				this.put(\bufnum, buf.bufnum);
 			};
 
@@ -548,7 +552,8 @@ JSTidyPattern : JSTidyNode {
 
 		using = using ? val;
 
-		// keep an eye out for symbols (which should exist in global "d" dict)
+		// watch for symbols (which should exist in global "d" dict)
+		// you can share patterns through a dictionary this way
 		if(val[0] == $\\, {
 			var curval = thisProcess.interpreter.d.at(val.drop(1).asSymbol);
 			if(using != curval, {
@@ -901,7 +906,7 @@ JSTidyFP : JSTidyNode {
 		});
 
 		// add your key in the currentEnvironment to JSTidy.fxnames
-		// JSTidyStep.play nees=ds fxnames to install sends to them
+		// JSTidyStep.play needs fxnames to install sends to them
 		JSTidy.fxnames = (JSTidy.fxnames ?? []).add(
 			currentEnvironment.findKeyForValue(this)
 		);
@@ -946,4 +951,3 @@ JSTidyFP : JSTidyNode {
 		} .play
 	}
 }
-

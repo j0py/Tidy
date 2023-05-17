@@ -97,8 +97,12 @@ JSMini {
 				})
 			}
 			{ ch == $_ } {
-				node = JSMiniSpace.new;
-				parsing = \space;
+				if(node.notNil, {
+					node.string_((node.string ? "") ++ ch);
+				}, {
+					node = JSMiniSpace.new;
+					parsing = \space;
+				});
 			}
 			{ ch == $< } {
 				node = JSMiniTurns.new;
