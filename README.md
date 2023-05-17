@@ -88,8 +88,6 @@ JSSamples.bufnum(\animals, 12)
 
 ## JSMini
 
-TODO: explain, usage, inner working
-
 The first thing i started working on is the mini-notation.
 
 At the moment (05-2023), the following is supported:
