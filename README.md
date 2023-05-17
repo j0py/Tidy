@@ -91,7 +91,7 @@ JSSamples.bufnum(\animals, 12)
 The first thing i started working on is the mini-notation.
 
 At the moment (05-2023), the following is supported:
-- s:n syntax, where "s" is the "bank" of the sound, and "n" the index
+- s:n syntax, where "s" is the "bank" of the sound, and "n" the index, but "s" can also be the synthdef, and "n" in that case the degree to play.
 - ```[1 2 3 4]``` nesting multiple notes into one
 - ```<1 2 3 4>``` alternate nested notes for each next cycle
 - the ```/2.11``` and ```*3.2``` to make notes longer or shorter
