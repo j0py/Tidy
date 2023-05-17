@@ -50,13 +50,54 @@ p.hush(8)
 
 ## Quark content:
 
-- samples.sc (TODO: explain, usage)
+- samples.sc
 
-- mini.sc (TODO: explain, usage, features supported, inner working)
+- mini.sc
 
-- tidy.sc (TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported)
+- tidy.sc
 
-- pmini.sc (TODO: explain, usage)
+- pmini.sc
+
+## JSSamples
+
+TODO: explain, usage
+
+JSSamples makes it easy to load folders contaning WAV samples into memory, so that they can be used for triggering sounds.
+
+```
+JSSamples.load("mysamples")
+```
+This will load samples from filder "mysamples", which should be in the same folder as the file where the load statement above is in. Absolute paths not (yet) supported.
+
+The "mysamples" folder is expected to have subfolders contaning WAV files.  
+Subfolders usually have names like "kick", "snare", etc but can have any name.
+
+The WAV files of subfolder "animals" will end up in the global Library storage and can be reached using:
+
+```
+Library.at(\samples, \animals, index)
+```
+The ```\samples``` symbol is hard-coded, the ```\animals``` symbol is called the "bank" contaning samples, the ```index``` is just a numerical index of each sample.
+
+Usually, you need the Buffer object or the bufnum of the Buffer object for a given bank/index combination. The "buf" and "bufnum" methods of JSSamples do that:
+```
+JSSamples.buf(\animals, 12)
+// or:
+JSSamples.bufnum(\animals, 12)
+```
+
+
+## JSMini
+
+TODO: explain, usage, features supported, inner working
+
+## JSTidy
+
+TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported
+
+## Pmini
+
+TODO: explain
 
 ### Usage:
 ```
