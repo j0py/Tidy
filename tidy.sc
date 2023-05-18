@@ -50,7 +50,7 @@ JSTidy {
 	}
 	
 	// Send signal from your proxy's private bus to other NodeProxies
-	// using the \filterIn -> { } method. The slot number to use is
+	// using the \mix -> { } method. The slot number to use is
 	// the bus index of your proxy + 10. This way, each NodeProxy
 	// will use its own unique slot number.
 

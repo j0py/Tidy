@@ -178,9 +178,73 @@ Another thing i encountered with the alternating steps is, that you cannot use t
 If you do that, then a pattern like ```"1 2 <3 <4 5>> 6"``` will result in "1 2 3 6", "1 2 5 6", "1 2 3 6" etc, but never "1 2 4 6". This because "<4 5>" will only be selected when the cycle number is odd, and within this step, "5" will thus always be selected.  
 In JSMini, the JSMiniTurns object in the tree counts "turns" by itself (and only for itself). And uses that for the modulo operation. And then you will get "1 2 3 6", "1 2 4 6", "1 2 3 6", "1 2 5 6", etc. Fun, isn't it?
 
+I read a blog yesterday on how to write a compiler, splitting it up in a reader, lexer, parser and errorhandler. I want to make the mininotation parser and the tidy parser that way. It could become more robuust and better expandable then.
+
 ## JSTidy
 
 TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported
+
+File tidy.sc contains the code for the JSTidy class (and supporting classes), and some extensions (extra methods) on the NodeProxy and ProxySpace classes. Together, they make possible what is shown in the example code at the start of this README.
+
+### ProxySpace and NodeProxy: create the mix
+
+A few extensions on NodeProxy and ProxySpace make it easier to create a "mixer" with built-in "effects".
+
+When making a mixer with effects, somehow you have to address the problem of "order of execution". If an FX synth reads its input from a bus, and a SOURCE synth writes its audio to that bus, then it will only work if the SOURCE synth writes its audio BEFORE the FX synth reads it. This can be accomplished by putting the SOURCE synth ABOVE the FX synth in the Node-graph of the SC Server.  
+The SCSynth does this for every block of audio: it clears the bus, it lets synths use the bus, activating them one after the other from the TOP of the nodetree to the BOTTOM.
+
+NodeProxies solve this "problem" easily: each NodeProxy has a number of "slots" in which you can put "things" like a function, synth, filter. Check the documentation on "supported sources" for NodeProxy class.  
+When a NodeProxy generates its audio output, it activates all processes that are attached to its slots, in slot order. So slot 0 gets a chance to use the bus of the NodeProxy first, and then slot 1, and then slot 2, ad infinitum.  
+And then the output of the NodeProxy is "ready": other NodeProxies can read it, or a Monitor on the NodeProxy can play the audio to hardware buses (or any other buses).
+
+Imagine a NodeProxy acting as a SOURCE, and another NodeProxy, acting as an FX. The SOURCE NodeProxy has some synth playing on its private bus.
+
+On the FX NodeProxy, we could do:
+```
+~fx[n] = \filterIn -> { |in| ~source * 0.3 }
+```
+This will read the finished audio from the ~source proxy, and write it on the bus of the ~fx proxy with a "gain" of 0.3. It mixes with other audio that may exist on the ~fx proxies bus. The only question is: what slot (n) to use?
+
+We must be able to add any other proxy signal to ~fx, and for each proxy, we must use a unique number as slot number. Especially if we want to change the gain of remove it entirely, we must still remember the slot number somehow.  
+It took me a while, but here's my trick: the index of the private bus of the ~source proxyis a unique number that can be used as a slot number. Every NodeProxy has it's own audio bus, and so the will all have a different bus index number.
+
+We can ask the server how much audio buses it maximally has, and so we know that the actual effect can be places on a slot somewhere above that number of audio buses. If the server has 1024 audio buses max, then we get this:
+```
+~fx[~source.bus.index + 10] = \filterIn -> { |in| ~source * 0.3 }
+~fx[1024 + 10] = \filterIn -> { |in| LPF.ar(in, 200) }
+```
+I add 10 to all the slotnumbers to steer clear from the hardware ins/outs.
+
+I don't know how the do it, but this way JITLib takes care of the "order of execution" problem for me. I can change effects while everything is playing, i can change gains, remove them, it just works. Great.
+
+I added the fx() function to NodeProxy, which will install a fx like above, but also it adds the name of the proxy to a list of effect proxies that is kept in the JSTidy class (classvar). If you lateron write something like "room 0.1", then JSTidy can recognize "room" as the name of the ~room proxy, and then knows what to do: set the gain to 0.1.
+
+Another extension of NodeProxy is the ">" function, which will send the signal os the proxy to another proxy with a given gain.
+```
+~out.play;
+~raw.fx { |in| in } > "out 0.8"
+```
+This mixer has proxy ~out playing to hardware bus, and proxy ~raw playing to ~out with a gain of 0.8. If you send audio to ~raw, it will be played to ~out, and then your speakers. You can extend this like ever you want!  
+The fx() function supports supplying a Function, like above, but you can also give it a symbol, which will be taken for a synthdef.
+```
+~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 1]) > "raw 0.8"
+```
+Here, i created some ```\comb``` SynthDef and the extra arguments will be passed on to the synth instance of it. It will play to the ~raw bus.
+
+It is developing a bit, but the way i make the "mix" will stabilize to something that is handy, and then it could be moved into some "setup.scd" to always just "be there". The ~raw could be used for the Kick and Bass sounds, and i could create a ~hpf NodeProxy with a high pass filter writing to ~raw. All instruments other than kick of bass must then write to ~hpf. This will prevent bass rumbling and interference in the resulting audio, maybe.
+
+### Interpreter: trigger sounds
+
+$
+#
+
+
+
+
+
+
+
+
 
 ## Pmini
 
@@ -205,8 +269,6 @@ Pbindef(\x,
 ## Roadmap
 
 Current version v1.0.0, 2023-04-25
-
-I read a blog yesterday on how to write a compiler, splitting it up in a reader, lexer, parser and errorhandler. I want to make the mininotation parser and the tidy parser that way. It could become more robuust and better expandable then.
 
 I don't think i will have time to implement ALL functionality of Tidal Cycles. I just want to implement enough to enjoy making music with it. But maybe if more people join in to add functions.. who knows. Have to figure out this github thing..
 
