@@ -184,16 +184,20 @@ TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles
 
 ## Pmini
 
-TODO: explain
+TODO: explain how it works internally
 
 ### Usage:
 ```
 (
 Pbindef(\x).clear;
 Pbindef(\x,
-	\instrument, \playbuf,
-	[\dur, \num], Pmini("[[3 ~] 5(3,8)]/2"),
-	\bufnum, Pfunc({ |e| JSSamples.bufnum(\kit1, e.num) ? \rest }),
+	\instrument, \default,
+	[\dur, \str, \num], Pmini("[[[3:4 3:5 3:6 3:7] ~] 5(3,8):4]/2"),
+	\legato, 0.2,
+	\degree, Pfunc({ |e|
+		case { e.str == "~" } { \rest } { e.str.asInteger };
+	}),
+	\octave, Pfunc({ |e| (e.num ? 5).asInteger }),
 ).play;
 )
 ```
@@ -201,4 +205,12 @@ Pbindef(\x,
 ## Roadmap
 
 Current version v1.0.0, 2023-04-25
+
+I read a blog yesterday on how to write a compiler, splitting it up in a reader, lexer, parser and errorhandler. I want to make the mininotation parser and the tidy parser that way. It could become more robuust and better expandable then.
+
+I don't think i will have time to implement ALL functionality of Tidal Cycles. I just want to implement enough to enjoy making music with it. But maybe if more people join in to add functions.. who knows. Have to figure out this github thing..
+
+
+
+
 
