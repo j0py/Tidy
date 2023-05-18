@@ -182,11 +182,11 @@ I read a blog yesterday on how to write a compiler, splitting it up in a reader,
 
 ## JSTidy
 
-TODO: explain, usage, making a mix, SCLang interpreter limitations, Tidal Cycles functions supported
-
 File tidy.sc contains the code for the JSTidy class (and supporting classes), and some extensions (extra methods) on the NodeProxy and ProxySpace classes. Together, they make possible what is shown in the example code at the start of this README.
 
 ### ProxySpace and NodeProxy: create the mix
+
+#### NodeProxy
 
 A few extensions on NodeProxy and ProxySpace make it easier to create a "mixer" with built-in "effects".
 
@@ -206,45 +206,73 @@ On the FX NodeProxy, we could do:
 This will read the finished audio from the ~source proxy, and write it on the bus of the ~fx proxy with a "gain" of 0.3. It mixes with other audio that may exist on the ~fx proxies bus. The only question is: what slot (n) to use?
 
 We must be able to add any other proxy signal to ~fx, and for each proxy, we must use a unique number as slot number. Especially if we want to change the gain of remove it entirely, we must still remember the slot number somehow.  
-It took me a while, but here's my trick: the index of the private bus of the ~source proxyis a unique number that can be used as a slot number. Every NodeProxy has it's own audio bus, and so the will all have a different bus index number.
+It took me a while, but here's my trick: the index of the private bus of the ~source proxy is a unique number that can be used as a slot number. Every NodeProxy has it's own audio bus, and so they will all have a different bus index number.
 
-We can ask the server how much audio buses it maximally has, and so we know that the actual effect can be places on a slot somewhere above that number of audio buses. If the server has 1024 audio buses max, then we get this:
+We can ask the server how much audio buses it maximally has, and so we know that the actual effect can be placed on a slot somewhere above that number of audio buses. If the server has 1024 audio buses max, then we get this:
 ```
 ~fx[~source.bus.index + 10] = \filterIn -> { |in| ~source * 0.3 }
 ~fx[1024 + 10] = \filterIn -> { |in| LPF.ar(in, 200) }
 ```
 I add 10 to all the slotnumbers to steer clear from the hardware ins/outs.
 
-I don't know how the do it, but this way JITLib takes care of the "order of execution" problem for me. I can change effects while everything is playing, i can change gains, remove them, it just works. Great.
+I don't know how they do it, but this way JITLib takes care of the "order of execution" problem for me. I can change effects while everything is playing, i can change gains, remove them, it just works. Great.
 
 I added the fx() function to NodeProxy, which will install a fx like above, but also it adds the name of the proxy to a list of effect proxies that is kept in the JSTidy class (classvar). If you lateron write something like "room 0.1", then JSTidy can recognize "room" as the name of the ~room proxy, and then knows what to do: set the gain to 0.1.
 
-Another extension of NodeProxy is the ">" function, which will send the signal os the proxy to another proxy with a given gain.
+Another extension on NodeProxy is the ">" function, which will send the signal of the proxy to another proxy with a given gain.
 ```
+s.boot;
+p = ProxySpace.push(s);
 ~out.play;
-~raw.fx { |in| in } > "out 0.8"
+~raw.fx { |in| in } > "out 0.8";
 ```
-This mixer has proxy ~out playing to hardware bus, and proxy ~raw playing to ~out with a gain of 0.8. If you send audio to ~raw, it will be played to ~out, and then your speakers. You can extend this like ever you want!  
-The fx() function supports supplying a Function, like above, but you can also give it a symbol, which will be taken for a synthdef.
+This "mixer" has proxy ~out playing to hardware bus, and proxy ~raw playing to ~out with a gain of 0.8. If you send audio to ~raw, it will be played to ~out, and then your speakers. You can extend this like ever you want!  
+The fx() function supports supplying a Function, like above, but you can also give it a symbol, which will be taken for a SynthDef.
 ```
 ~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 1]) > "raw 0.8"
 ```
 Here, i created some ```\comb``` SynthDef and the extra arguments will be passed on to the synth instance of it. It will play to the ~raw bus.
 
-It is developing a bit, but the way i make the "mix" will stabilize to something that is handy, and then it could be moved into some "setup.scd" to always just "be there". The ~raw could be used for the Kick and Bass sounds, and i could create a ~hpf NodeProxy with a high pass filter writing to ~raw. All instruments other than kick of bass must then write to ~hpf. This will prevent bass rumbling and interference in the resulting audio, maybe.
+It is developing a bit, but the way i make the "mix" will stabilize to something that is handy, and then it could be moved into some "setup.scd" to always just "be there". The ~raw could be used for the Kick and Bass sounds, and i could create a ~hpf NodeProxy with a high pass filter writing to ~raw. All instruments other than Kick or Bass must then write to ~hpf. This will prevent bass rumbling and interference in the resulting audio, maybe.
+
+#### ProxySpace
+
+On ProxySpace i added method config(bpm, bpb), which installs a TempoClock with a tempo according to "bpm" (beats per minute), and also sets quantisation according to "bpb" (beats per bar). I am not satisfied with this method, and if the call goes into some setup.scd file, it is no longer needed.
+
+Method ```hush(<fadetime>)``` is also added to ProxySpace. A short way to end the performance.
+
+I find it hard to start playing sounds again after using ```hush```. Usually i recompile the class library to totally reset supercollider and then i can start again. I still have to think about/work on that.
 
 ### Interpreter: trigger sounds
 
-$
-#
+#### Interpreter limitations
 
+The Interpreter is something i have to deal with. I messed with setting a prepocessor on the Interpreter, in which you can do things with the code-to-be-interpreted, but the result is remarkably unstable, crashing SCLang if anything goes wrong. Not recommended.
 
+```d1 $ s "bd sn" ``` Will never work in the Interpreter.
 
+I want to use NodeProxies anyway, so there will be differences.  
+What i have so far is this:
+```
+~a < "s bd sn" - "raw 0.3"
+```
+You must send the sound somewhere, or you will not hear it. Hence "raw 0.3".
 
+The ```#``` sign is not possible in SC Interpreter, i replaced it with ```-```, which also looks quite tidy :).
 
+The "<" function has been added to NodeProxy to get things going. The Interpreter first encounters ```~a```, which results in a NodeProxy (we are in a ProxySpace). The "<" method on the proxy is called, with a String argument.  
+The String argument has this format: ```<function name> <pattern>```.  
 
+The "<" method creates a JSTidy object around the proxy, and this JSTidy object will handle the function and the pattern. Yep, it starts building a tree again.  
+The result so far is that JSTidy object, and the Interpreter continues to the ```-``` operator. Of course, the JSTidy object has this method, and it will accept, uh, a String as argument. JSTidy processes the String (containing again a function name and a pattern), and this can be repeated as required, calling many functions with many patterns. Finally, the code to interpret is all done, and then the Interpreter will call ```printOn``` on the JSTidy object, so that something is written to the post window. And in the implementation of the ```printOn``` method, i have the opportunity to start a Routine that will play cycles.
 
+Sneaky and hacky, but reliable enough.
 
+#### Functions supported by the JSTidy class
+
+#### Inner working: building a tree that produces cycles
+
+TODO: explain, usage, Tidal Cycles functions supported
 
 ## Pmini
 
