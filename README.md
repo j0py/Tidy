@@ -117,7 +117,7 @@ The ```log_nodes``` method will log the internal tree that has been parsed to th
 The ```log_tokens``` method will log what tokens have been parsed from the pattern specification.
 
 The ```log(n)``` method will log the first n cycles to the post window.  
-```
+
 These functions can be used to test if JSMini is working as expected, and if not, where it may go wrong.
 
 ### Inner working
