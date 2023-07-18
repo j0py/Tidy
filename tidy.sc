@@ -1,33 +1,51 @@
 /*
-	2023-01-19 STACK,
-	~a << "note 1 2 3, 5 6" |> "def atone" : 3 against 2
-	~a << "note [1 2 3, 5 6]" |> "def atone" : 3 against 2
-	~a << "note [1 <2 _> 3, 5 6]" |> "def atone" : 3 against 2 also
-	~a << "note {1 2 3, 5 6}" |> "def atone" : triplets 15 26 35 16 25 36
+	- give JSTidyCycle a dictionary too; functions may set things
+      in it, which could influence playing steps, or the routine
 
-	because of parallellism, you must resolve \space steps before
-	joining two	(or more) parallel streams of steps into one stream
-	of steps. a step only has \on, \dur, \string, \number
+    - "ser 2 3" | <sequence 1> | <sequence 2> | <default stuff>
+      this would play:
+      <sequence 1> | <default stuff> 2 times
+      <sequence 2> | <default stuff> 3 times
+      <sequence 1> | <default stuff> 2 times
+      etc
 
-	2023-01-06, some ideas:
-	-----------------------
-	- "hover" function: granulates a buffer, but hovers on certain spots,
-	given by a pattern, before moving on at normal speed
-	- "shift" function: shift the cycle left or right for certain number
-	of steps, given by a pattern (0 = no shift)
-	- "slice" : the number part could be the slice number to play, while
-	the string part could be the midiratio to play it with
-	- "life" : bring in small random variations
+    - "one 2 3" | <sequence 1> | <sequence 2> | <default stuff>
+      this would play:
+      <sequence 1> | <default stuff> 2 times
+      <sequence 2> | <default stuff> 3 times
+	  and then the routine would stop
+
+    - "one" | <some stuff> would play <some stuff> once
+
+    - "par" | <sequence 1> | <sequence 2> | <some stuff>
+      finds out the last branch by itself (<some stuff>)
+      plays the branches before it in parallell as sub-routines
+      of the main routine. or you could just combine the cycles
+      coming out of <sequence 1> | <some stuff> with the cycles that
+      come out of <sequence 2> | <some stuff> in 1 routine. i want it
+      to be possible that sequence 1 and 2 have different lengths though.
+
+    - check differende between slice and splice. i remember that splice
+      makes sure that the sample always fits exactly by adusting rate.
+
+	- "rot" function: rotate the cycle left or right for certain number
+	of steps, given by a pattern (0 = no rotation).
+
+	- "slice"/"splice" : note:slice_number. rate = (note - 60).midiratio
+
+	- "life" : bring in small random variations (wow:flutter)
+
+	- use Shaper.ar to create distortion effects
 */
 
-JSTidy {
-	classvar loglevel, routines, <>fxnames;
+JSTidy : JSTidyTree {
+	classvar loglevel, routines;
 
-	var <proxy, count, tree, cur;
+	var <>proxy, <>count;
 
-	*new { |proxy| ^super.newCopyArgs(proxy) }
+	*new { |proxy| ^super.new.proxy_(proxy) }
 
-	*show { |count| ^super.newCopyArgs(nil, count) }
+	*show { |count| ^super.new.count_(count) }
 
 	*should_log { |level|
 		loglevel ?? { loglevel = [] };
@@ -53,120 +71,154 @@ JSTidy {
 	// using the \mix -> { } method. The slot number to use is
 	// the bus index of your proxy + 10. This way, each NodeProxy
 	// will use its own unique slot number.
-
-    // do this:
+	//
+	/*
 	*send { |from, str|
-		from.ar(2); // make sure a bus is allocated (we need the index)
+		var slot, curr;
+		from.ar(2); // make sure a bus is allocated
+		slot = from.bus.index + 10; // we need the index
 
-		str.split($ ).clump(2).do { |pair|
-			var to, gain, slot;
-			
-			to = currentEnvironment.at(pair[0].asSymbol);
-			gain = pair[1].asFloat;
-			slot = from.bus.index + 10;
-
-			if(to.objects.at(slot).isNil, {
-				to.put(slot, \mix -> { from.ar });
-			});
-
-			//"xset % % %".format(pair[0], "mix"++(slot), gain).postln;
-			to.xset(("mix"++(slot)).asSymbol, gain);
+		curr = Dictionary.new;
+		currentEnvironment.keysValuesDo { |key, proxy|
+			if(proxy.objects.at(slot).notNil) { curr.put(key, proxy) };
 		};
+		
+		// str format: "<proxy> <gain> <proxy> <gain> ..."
+		str.split($ ).clump(2).do { |pair|
+			var key = pair[0].asSymbol;
+			var to = currentEnvironment.at(key);
+
+			if(to.notNil) {
+				var gain = pair[1].asFloat;
+
+				curr.put(key, nil); // this proxy is (re)specified here
+				
+				// do not replace: it will disrupt the sound
+				if(to.objects.at(slot).isNil, {
+					to.put(slot, \mix -> { from.ar });
+				});
+
+				//"xset % % %".format(pair[0], "mix"++(slot), gain).postln;
+				to.xset(("mix"++(slot)).asSymbol, gain);
+			}
+		};
+
+		// remove sends that are present, but not re-specified
+		curr.keysValuesDo { |key, proxy| proxy.put(slot, nil) };
 	}
+	*/
 	
 	printOn { |stream|
+		// make sure that the routines Order exists
 		routines ?? { routines = Order.new };
 
-		tree ?? { ^this }; // something may have gone wrong
-		if(JSTidy.should_log(\tree), { tree.log });
+		// if tree is nil then something has gone wrong during the
+		// creation of the new tree. return right here, so that the old
+		// tree keeps running.
+		tree ?? { "tree nil".postln; ^this };
+		
+		if(JSTidy.should_log(\tree)) { tree.log };
 
+		// with count, you can log some cycles instead of playing them
 		count !? {
-			if(JSTidy.should_log(\cycle), {
-				count.do { tree.get(JSTidyCycle.new) };
-				tree.get(JSTidyCycle.new).postln;
-			});
+			if(JSTidy.should_log(\cycle)) {
+				(count - 1).do { tree.get(JSTidyCycle.new) };
+				tree.get(JSTidyCycle.new).postln.class.postln;
+			};
 		};
 
+		// if you have a proxy and got here, then we can play
 		proxy !? {
-			var slot;
-			proxy.ar(2);
-			slot = proxy.bus.index;
-			proxy.printOn(stream);
+			var slot, name;
+			proxy.ar(2); // make sure we have a bus
+			name = currentEnvironment.findKeyForValue(proxy);
+			slot = proxy.bus.index; // we need the index
+			proxy.printOn(stream);  // output to postwindow
+			
 			Routine({
-				// on re-evaluation i want a new routine
+				// always create a fresh new routine on re-evaluation
 				routines.at(slot) !? { |r| r.stop };
 				routines.put(slot, Routine({
-					var time, cycle, slow;
 					loop({
-						cycle = tree.get(JSTidyCycle.new);
+						var cycle = tree.get(JSTidyCycle.new, name);
 						if(JSTidy.should_log(\cycle), { cycle.postln });
-						slow ?? {
-							var step = cycle.steps.last;
-							
-							slow = (step.at(\slow) ? 1);
-							slow = slow / (step.at(\fast) ? 1);
+						cycle.steps.do { |step|
+							var slow;
+							if(step.trig > 0) { step.play(proxy) };
+							slow = (step.at(\slow) ? "1").asFloat;
+							(step.delta * slow).wait;
 						};
-						time = 0;
-						cycle.steps.do { |step, i|
-							var on = step.on * slow; // from prev step!
-							(on - time).wait; // time catches up
-							time = on;
-							step.play(proxy);
-							slow = (step.at(\slow) ? 1);
-							slow = slow / (step.at(\fast) ? 1);
-						};
-						max(0, slow - time).wait;
 					});
 				}).play(proxy.clock));
-			}).play(proxy.clock, proxy.quant);
+			}).play(proxy.clock, proxy.quant); // quant: wait for beat
 		}
 	}
 
-	// If you make a mistake, you might get here.
-	// PrintOn does nothing if tree is nil.
+	// if you make a mistake, you might get here.
+	// printOn will do nothing if tree is nil: current sound keeps playing
 	doesNotUnderstand { |selector ... args|
 		tree = nil;
 		JSTidyException("% not understood".format(selector)).throw;
 	}
 
-	<> { |input| }
+	//> { |str| JSTidy.send(proxy, str) }
+
+	-- { |array|
+		array.do { |tidytree| cur.add(tidytree.tree) };
+		cur = cur.parent;
+	}
+}
+
+JSTidyTree {
+	var <tree, cur;
 	
-	> { |str| JSTidy.send(proxy, str) }
-
-	// A "branch" is a sub-tree.
-	//<< { |str| this.add_branch("<<").add_func(str) }
-
-	// "<function name> <pattern>"
+	// returns a JSTidy function. str format: "<function name> <pattern>"
+	// a JSTidy function takes a cycle, maybe alters it, and returns it.
 	func { |str|
-		var func, pat, class, inst;
+		var func, pat, class;
 
 		str = str.split($ );
 		func = str.removeAt(0);
 		pat = str.join($ ).stripWhiteSpace;
 
+		if(func[0] == $~) {
+			^JSTidySend(func.drop(1).toLower, pat)
+		};
+		
 		class = "%%".format(func[0].toUpper, func.drop(1).toLower);
 		class = "JSTidyFP_%".format(class).asSymbol.asClass;
 		class !? { ^class.new(pat) };
 		^JSTidyFP(func, pat);
 	}
 
-	// Add an object to the tree, which starts off with a branch.
+	// add an object to the lazily created tree
 	add { |obj|
 		tree ?? { tree = cur = JSTidyBranch("tree") };
 		cur.add(obj);
-		if(obj.become_cur_after_add, { cur = obj });
+		obj.parent = cur;
+		if(obj.become_cur_after_add) { cur = obj };
 	}
 
+	// create a JSTidy function and add it to the tree
 	add_func { |str| this.add(this.func(str)) }
 
+	// create and add a JSTidy branch to the tree
+	// a JSTidy branch let's all its children consequtively alter a cycle.
 	add_branch { |str| this.add(JSTidyBranch(str)) }
 
+	// the | operator adds a branch (like the $ in Tidal Cycles)
+	// in SuperCollider's Interpreter, the "$" operator is not possible
+	// because the $ is in use for writing character entities. And so
+	// the Interpreter will get confused if the $ is used.
 	| { |str| this.add_branch("|").add_func(str) }
 
-	// These operators add another "<func> <pattern>" to the tree,
+	// following operators add JSTidy functions to the tree,
 	// thereby specifying who should define the timing structure
-	// and what should be done with the value(s) from the
-	// "<func> <pattern>".
+	// and what should be done with the value(s) coming from the
+	// JSTidy functions (who will be overriding the other if both
+	// specify a value for the same key).
+	// In the end, all values for keys end up in a Dictionary inside
+	// each generated JSTidyStep.
 	//
 	|<| {  |str| this.add(JSTidyCombBoth("<").add(this.func(str))) }
 	< {  |str| this.add(JSTidyCombBoth("<").add(this.func(str))) }
@@ -174,9 +226,13 @@ JSTidy {
 	<| { |str| this.add(JSTidyCombRight("<").add(this.func(str))) }
 
 	|>| {  |str| this.add(JSTidyCombBoth(">").add(this.func(str))) }
+	// this one is also problematic for the Interpreter
 	//> {  |str| this.add(JSTidyCombBoth(">").add(this.func(str))) }
 	|> { |str| this.add(JSTidyCombLeft(">").add(this.func(str))) }
-	>| { |str| this.add(JSTidyCombRight(">").add(this.func(str)))	}
+	>| { |str| this.add(JSTidyCombRight(">").add(this.func(str))) }
+
+	// the "-" is a tidy shortcut (like the # in Tidal Cycles).
+	// the "#" is not possible in the Interpreter sadly.
 	- { |str| this.add(JSTidyCombLeft(">").add(this.func(str))) }
 
 	|+| {  |str| this.add(JSTidyCombBoth("+").add(this.func(str))) }
@@ -199,39 +255,82 @@ JSTidy {
 	%| { |str| this.add(JSTidyCombRight("%").add(this.func(str))) }
 }
 
+// a JSTidyCycle holds JSTidySteps.
 JSTidyCycle {
-	var <>steps;
+	var <>steps, <>env;
 
-	*new { |steps| ^super.newCopyArgs(steps ? []) }
+	*new { |steps| ^super.new.make_steps(steps).make_index }
 
-	add { |step| steps = steps.add(step) }
+	make_steps { |steps_array|
+		// step_array: [ [<trig>, <delta>, <dur>, <str>, <num>], .. ]
+		steps_array !? {
+			steps = steps_array.collect { |el|
+				if(el.isArray) {
+					el = JSTidyStep(el[0], el[1], el[2], el[3], el[4]);
+				};
+				el;
+			}
+		}
+	}
+	
+	make_index {
+		var indexes=[], times=[];
+		steps !? {
+			steps.do { |step, index|
+				indexes = indexes.add(index);
+				times = times.add(0);
+				indexes = indexes.add(index);
+				times = times.add(step.delta);
+			};
+			times.removeAt(0);
+			env = Env(indexes, times);
+		}
+	}
 
-	stepAt { |t|
-		steps.do { |s| if((t >= s.on).and(t < (s.on + s.dur)), { ^s }) };
-		^nil;
+	// use an Env to get a step index, given a time
+	at { |time|
+		steps ?? { ^nil };
+		env ?? { ^nil };
+		^steps.at(env.at(time));
 	}
 
 	printOn { |stream|
 		stream << "cycle\n";
-		steps.do { |step| stream << " %".format(step) };
+		steps !? { steps.do { |step| step.printOn(stream) } };
 	}
 }
 
 JSTidyStep {
-	var <>on, <>dur, <>dict;
+	var <>trig, <>delta, <>dur, <>dict, <>sends;
 
-	*new { |on, dur|
-		^super.newCopyArgs(on, dur, Dictionary.new)
+	*new { |trig, delta, dur, str, num|
+		^super.newCopyArgs(trig ? 0, delta ? 1, dur ? 1)
+		.dict_(Dictionary.new)
+		.sends_(Dictionary.new)
+		.put(\str, str)
+		.put(\num, num);
 	}
-
+	
 	putAll { |argdict| dict.putAll(argdict) }
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
+	send { |to, gain| sends.put(to.asSymbol, gain.asFloat) }
+	
 	play { |proxy|
 		var instr, def, sustain, dx7, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
 
+		// control proxy intercept
+        if(proxy.rate == \control) {
+			dict.at(\val) !? { |val|
+				Server.default.setControlBusValue(proxy.bus.index, val);
+				//"set bus % val %".format(proxy.bus.index, val).postln;
+			};
+			^this;
+		};
+
+		// it will be audio
 		this.at(\snd) !? { |bank|
 			var index = (this.at(\buf) ? 0).asInteger;
 			var buf = Library.at(\samples, bank.asSymbol, index);
@@ -247,8 +346,8 @@ JSTidyStep {
 
 			this.put(\snd, nil);
 			this.put(\buf, nil);
-			this.put(\chord, nil);
-			this.put(\strum, nil);
+			// this.put(\chord, nil);
+			// this.put(\strum, nil);
 		};
 
 		this.at(\def) !? { |def|
@@ -257,6 +356,7 @@ JSTidyStep {
 		};
 
 		this.at(\note) !? { |note|
+			// if > 22 then it is a midinote, right?
 			this.put(\degree, note.asFloat);
 			this.put(\note, nil);
 		};
@@ -272,85 +372,120 @@ JSTidyStep {
 		if(def.isNil, { "% unknown".format(instr).postln; ^this });
 
 		dict.at(\freq) ?? {
-			var stepsPerOctave = 12;
+			var steps = 12;
 			var mtranspose = dict.at(\mtranspose) ? 0;
 			var degree = dict.at(\degree) ? 0;
 			var gtranspose = 0;
 			var root = dict.at(\root) ? 0;
 			var oct = dict.at(\octave) ? 5;
 
-			var note = (degree + mtranspose).degreeToKey(scale, stepsPerOctave);
+			var note = (degree + mtranspose).degreeToKey(scale, steps);
 			// midi is the midinote (continuous intermediate values)
-			var midi = ((note + gtranspose + root) / stepsPerOctave + oct) * 12.0;
+			var midi = ((note + gtranspose + root) / steps + oct) * 12.0;
 			var ctranspose = 0;
 			var harmonic = 1.0;
 			var detune = 0;
 
 			dict.at(\midinote) !? { midi = dict.at(\midinote) };
 
-			dict.put(\freq, (midi + ctranspose).midicps * harmonic + detune);
+			dict.put(
+				\freq,
+				(midi + ctranspose).midicps * harmonic + detune
+			);
 		};
 
 		dict.at(\legato) ?? { dict.put(\legato, 0.8) };
-		sustain = (dict.at(\legato) ? 0.8) * dur
+		sustain = dict.at(\legato) * dur
 		* (dict.at(\slow) ? 1)
 		/ (dict.at(\fast) ? 1);
 		dict.put(\secs, sustain / proxy.clock.tempo);   // in seconds
+
+		// TODO: here is a chance to play it to some other bus
+		// because of some fx you want. or multiple buses.
+		// synthdefs could support \out, \out2, \out3, etc
+		// and also \gain, \gain1, \gain2 etc
+		//
+		// Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+		//
 		dict.put(\out, proxy.bus.index);
 
-		if(JSTidy.should_log(\step), { this.postln });
-		
-		JSTidy.fxnames.do { |name|
-			var gain = dict.at(name.asSymbol);
-			var to = currentEnvironment.at(name.asSymbol);
-			var slot = proxy.bus.index + 10;
-			
-			if(to.objects.at(slot).isNil, {
-				to.put(slot, \mix -> { proxy.ar });
-			});
+		// this is correct behavior when NOT operating inside a Stack:
+		// the signal of the entire proxy (also from other steps) will
+		// be sent to the fx. Inside a stack we would not want that.
 
-			// hmmm..
-			to.set(("mix"++(slot)).asSymbol, (gain ? 0).asFloat);
-			//"% % gain %".format(name, "mix"++(slot), gain).postln;
+		// in a Seq, one can installs a send, while the next line
+		// does not need it, so who will remove the send then?
+		// in a Seq, each step should use \send1 \gain1.
+		// make your SynthDefs all like that.
+
+		sends.keys.do { |fx, i|
+			var gain = sends.at(fx);
+			fx = currentEnvironment.at(fx.asSymbol);
+			dict.put(("send"++((i+1).asString)).asSymbol, fx.bus.index);
+			dict.put(("gain"++((i+1).asString)).asSymbol, gain.asFloat);
 		};
 
+		if(JSTidy.should_log(\step), { this.postln });
+
+		/*
+		sends.keysValuesDo { |fx, gain|
+			var slot = proxy.bus.index + 10;
+			fx = currentEnvironment.at(fx.asSymbol);
+
+			if(fx.objects.at(slot).isNil, {
+				fx.put(slot, \mix -> { proxy.ar });
+			});
+
+			fx.set(("mix"++(slot)).asSymbol, (gain ? 0).asFloat);
+		};
+		*/
+		
 		//                         degree, root, octave
 		//Scale.major.degreeToFreq(2, 60.midicps, 1);
 		rootfreq = dict.at(\freq);
 		
-		(this.at(\chord) ? "0").do { |ch|
-			ch = ch.asInteger - $0.asInteger;
-			dict.put(\freq, scale.degreeToFreq(ch, rootfreq, 0));
+		Routine({
+			var synths, strum;
 
-			dx7 !? {
-				dict.putAll(dx7.params(dict.at(\freq), dict.atFail(\vel, 64)))
+			strum = dict.at(\strum) ? 0;
+			synths = List.new;
+			
+			(dict.at(\chord) ? "0").do { |ch, i|
+				ch = ch.asInteger - $0.asInteger;
+				dict.put(\freq, scale.degreeToFreq(ch, rootfreq, 0));
+
+				dx7 !? {
+					dict.putAll(
+						dx7.params(dict.at(\freq), dict.atFail(\vel, 64))
+					)
+				};
+
+				Server.default.bind {
+					synths.add(Synth(def.name, dict.asPairs));
+				};
+
+				(strum * i * 0.05).wait;
 			};
 
-			Routine({
-				var synth;
-				Server.default.bind {
-					synth = Synth(def.name, dict.asPairs);
-				};
+			if(def.hasGate, {
+				sustain.wait;
 				
-				if(def.hasGate, {
-					sustain.wait;
+				synths.do { |synth, i|
 					Server.default.bind { synth.set(\gate, 0) };
-				});
-			}).play;
-			
-			//Server.default.bind {
-			//	var synth = Synth(def.name, dict.asPairs);
-			//	if(def.hasGate, { sustain.wait; synth.set(\gate, 0) });
-			//};
-		};
+					(strum * i * 0.05).wait;
+				};
+			});
+		}).play;
 	}
 
 	printOn { |stream|
-		stream << "step % % ".format(
-			on.round(0.001).asString.padLeft(6),
-			dur.round(0.001).asString.padLeft(6)
+		stream << "step % % % ".format(
+			trig,
+			delta.round(0.01).asString.padLeft(6),
+			dur.round(0.01).asString.padLeft(6)
 		);
 		dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
+		//sends.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
 		stream << "\n";
 	}
 }
@@ -364,34 +499,65 @@ JSTidyException : Exception {
 /////////////////////////////////////////////////////
 
 JSTidyNode {
-	var <>children, <val;
+	var <>children, <val, <>parent;
 
 	*new { |val| ^super.newCopyArgs([], val.asString) }
 
 	add { |child| children = children.add(child) }
 
 	log { |indent=""|
-		"%% %".format(indent, this.class, val.quote).postln;
+		"%% %".format(indent, this.class, (val ? "").quote).postln;
 		children.do { |child| child.log(indent ++ "--") };
 	}
 
-	get { |cycle| ^cycle }
+	get { |cycle, name| ^cycle }
 
 	become_cur_after_add { ^false }
+
+	is_branch { ^false }
+	
+	steps_from_priority_queue { |pq|
+		// calculate delta times for all the steps
+		var steps = List.new;
+		var time = 0;
+		while { pq.notEmpty } {
+			var next_time, step = pq.pop;
+			next_time = pq.topPriority ? 1;
+			step.delta = next_time - time;
+			time = next_time;
+			steps.add(step);
+		};
+
+		^steps.asArray;
+	}
 }
 
 JSTidyBranch : JSTidyNode {
-	get { |cycle|
-		children.do { |child|	cycle = child.get(cycle) };
+    get { |cycle, name|
+		var last = children.last;
+
+		if(last.notNil.and(last.is_branch)) {
+			cycle = last.get(cycle, name);
+			children.drop(-1).do { |child|
+				cycle = child.get(cycle, name)
+			};
+		} {
+			children.do { |child| cycle = child.get(cycle, name) };
+		};
+
 		^cycle;
 	}
 
+	// anything added to the tree after this branch should become a child
+	// of this branch.
 	become_cur_after_add { ^true }
+
+	is_branch { ^true }
 }
 
 JSTidyComb : JSTidyNode {
+	// combine 2 steps, third param is where structure should come from.
 	combine { |step, stepAt, right|
-		//" combine\n  %\n  %".format(step, stepAt).postln;
 		stepAt.dict.keysValuesDo { |key, value|
 			case
 			{ val == ">" }
@@ -405,14 +571,14 @@ JSTidyComb : JSTidyNode {
 			{ val == "/" }
 			{
 				if(right.isNil, {
-					if(value <= 0, {
+					if(value == 0, {
 						step.put(key, 0) // division by zero
 					}, {
 						step.put(key, (step.at(key) ? 0) / value)
 					});
 				},{
 					var divider = (step.at(key) ? 0);
-					if(divider <= 0, {
+					if(divider == 0, {
 						step.put(key, 0) // division by zero
 					}, {
 						step.put(key, value / divider)
@@ -433,15 +599,13 @@ JSTidyComb : JSTidyNode {
 }
 
 JSTidyCombLeft : JSTidyComb {
-	get { |cycle|
-		var child = children.first.get(cycle);
+	get { |cycle, name|
+		var time, child = children.first.get(cycle, name);
 
+		time = 0;
 		cycle.steps.do { |step|
-			child.steps.do { |ch|
-				if((ch.on <= step.on).and((ch.on + ch.dur) > step.on), {
-					this.combine(step, ch);
-				});
-			}
+			this.combine(step, child.at(time));
+			time = time + step.delta;
 		};
 
 		^cycle;
@@ -449,15 +613,13 @@ JSTidyCombLeft : JSTidyComb {
 }
 
 JSTidyCombRight : JSTidyComb {
-	get { |cycle|
-		var child = children.first.get(cycle);
+	get { |cycle, name|
+		var time, child = children.first.get(cycle, name);
 
+		time = 0;
 		child.steps.do { |step|
-			cycle.steps.do { |ch|
-				if((ch.on <= step.on).and((ch.on + ch.dur) > step.on), {
-					this.combine(step, ch, \right);
-				});
-			}
+			this.combine(step, cycle.at(time), \right);
+			time = time + step.delta;
 		};
 
 		^child;
@@ -465,230 +627,250 @@ JSTidyCombRight : JSTidyComb {
 }
 
 JSTidyCombBoth : JSTidyComb {
-	/*
-		- create times array (start AND end times)
-		- chop/split cycle/child steps using times array (deepCopy!)
-		- chuck them into a priorityqueue
-		- create a new cycle from the priorityqueue (combining)
+	get { |cycle, name|
+		^cycle.steps_(
+			this.make_steps(
+				cycle.steps.asList,
+				children.first.get(cycle, name).steps.asList
+			)
+		);
+	}
+	
+	make_steps { |steps1, steps2|
+		var step1, step2, steps=List.new;
 
-		(Off works almost the same, except durations stay as they are)
-	*/
-	get { |cycle|
-		var child = children.first.get(cycle);
-		var steps = [], prev, times = OrderedIdentitySet.new;
-		var pq = PriorityQueue.new;
+		steps1 = steps1.asList;
+		steps2 = steps2.asList;
+		
+        while { (steps1.size > 0) or: (steps2.size > 0) } {
 
-		[cycle, child].do { |c| c.steps.do { |step|
-			times.add(step.on);
-			times.add(step.on + step.dur);
-		}};
+			step1 = step2 = nil;
+			
+			if(steps1.size > 0) { step1 = steps1.removeAt(0) };
+			if(steps2.size > 0) { step2 = steps2.removeAt(0) };
 
-		cycle.steps.do { |step|
-			var copy = step.deepCopy;
-			times.do { |time|
-				if((time > copy.on).and(time < (copy.on + copy.dur)), {
-					var copy2 = copy.deepCopy;
-					copy2.dur = time - copy2.on;
-					pq.put(copy2.on, \cycle -> copy2);
-					copy.on = time;
-					copy.dur = copy.dur - copy2.dur;
-				});
-			};
-			if(copy.dur > 0, { pq.put(copy.on, \cycle -> copy) });
+			case
+			{ step1.isNil } { steps.add(step2); step2 = nil }
+			{ step2.isNil } { steps.add(step1); step1 = nil }
+			{
+				case
+				{ abs(step1.delta - step2.delta) < 0.001 }
+				{
+					this.combine(step1, step2);
+					steps.add(step1);
+				}
+				{ step1.delta < step2.delta }
+				{
+					var d = step2.delta - step1.delta;
+					var step2a = step2.deepCopy.delta_(d).dur_(d);
+					steps2.insert(0, step2a);
+					step2.delta = step1.delta;
+					step2.dur = step1.dur;
+					this.combine(step1, step2);
+					steps.add(step1);
+				}
+				{
+					var d = step1.delta - step2.delta;
+					var step1a = step1.deepCopy.delta_(d).dur_(d);
+					steps1.insert(0, step1a);
+					step1.delta = step2.delta;
+					step1.dur = step2.dur;
+					this.combine(step2, step1);
+					steps.add(step2);
+				}
+			}
 		};
 
-		child.steps.do { |step|
-			var copy = step.deepCopy;
-			times.do { |time|
-				if((time > copy.on).and(time < (copy.on + copy.dur)), {
-					var copy2 = copy.deepCopy;
-					copy2.dur = time - copy2.on;
-					pq.put(copy2.on, \child -> copy2);
-					copy.on = time;
-					copy.dur = copy.dur - copy2.dur;
-				});
-			};
-			if(copy.dur > 0, { pq.put(copy.on, \child -> copy) });
-		};
-
-		// use pq.pop inside a loop to combine steps into steps[]
-		steps = [];
-		prev = nil;
-		pq.pop !? { |step|
-			while { step.notNil } {
-				if(prev.isNil, {
-					prev = step;
-					step = pq.pop;
-				}, {
-					if(prev.value.on == step.value.on, {
-						if(prev.key == \cycle, {
-							this.combine(prev.value, step.value);
-							steps = steps.add(prev.value);
-						}, {
-							this.combine(step.value, prev.value);
-							steps = steps.add(step.value);
-						});
-						step = pq.pop;
-						prev = nil;
-					}, {
-						steps = steps.add(prev.value);
-						prev = step;
-						step = pq.pop;
-					});
-				});
-			};
-			prev !? { steps = steps.add(prev.value) };
-		};
-
-		^cycle.steps_(steps);
+		^steps;
 	}
 }
 
 JSTidyPattern : JSTidyNode {
-	var seq, using;
+	var seq;
 
-	get { |cycle|
-		var seq_cycle;
+	get { |cycle, name|
+		seq = seq ? JSMiniParser(val).parse; // lazy instantiate
+		^JSTidyCycle(seq.next_cycle);
+	}
+}
 
-		using = using ? val;
+JSTidySend : JSTidyNode {
+	*new { |fx, pattern|
+		^super.new(fx).add(JSTidyPattern(pattern))
+	}
 
-		// watch for symbols (which should exist in global "d" dict)
-		// you can share patterns through a dictionary this way
-		if(val[0] == $\\, {
-			var curval = thisProcess.interpreter.d.at(val.drop(1).asSymbol);
-			if(using != curval, {
-				using = curval;
-				seq = nil; // force new instantiate
-			});
-		});
+	get { |cycle, name|
+		var time, gains = children.first.get(cycle, name);
+		var sendname = (name ++ val).asSymbol;
 
-		seq = seq ? JSMini(using); // lazy instantiate
+		currentEnvironment.at(sendname).to(val);
+		/*
+		"% numSynths %".format(
+			currentEnvironment.class,
+			Server.default.numSynths
+		).postln;
+		*/
+		
+		time = 0;
+		cycle.steps.do { |step|
+			step.send(sendname, gains.at(time).at(\str).asFloat);
+			time = time + step.delta;
+		};
+		^cycle;
+	}
+}
 
-		cycle = JSTidyCycle.new;
+JSTidyFP_Seq : JSTidyNode {
+	var seq; // a queue of steps
+	
+	*new { |pattern| ^super.new("seq").add(JSTidyPattern(pattern)) }
+	
+	get { |cycle, name|
+		var index;
 
-		// convert JSMiniSteps to JSTidySteps
-		seq_cycle = seq.next_cycle;
-		seq_cycle.steps.do { |step|
-			var item = JSTidyStep(step.on, step.dur);
-
-			item.put(\string, step.string);
-			item.put(\number, step.number);
-
-			cycle.add(item);
+		// keep a queue of steps of the sequence
+		seq ?? { seq = List.new };
+		if(seq.size <= 0) {
+			seq.addAll(children.first.get(cycle, name).steps)
 		};
 
-		^cycle;
+		// which child branch will deliver the next cycle?
+		// remember: your first child is the seq pattern
+		// dur/delta of the steps is ignored. we use 1 step for each cycle.
+		index = seq.removeAt(0).at(\str).asInteger;
+		index = index % (children.size - 1) + 1;
+		^children.at(index).get(cycle, name);
 	}
+
+	become_cur_after_add { ^true }
 }
 
-// "note 0 2 4 17" - "chord 123:1 135" // str = the chord, num = strum 0 - 9
+// "note 0 2 4" - "chord 123:1 135" // str = the chord, num = strum 0 - 9
 JSTidyFP_Chord : JSTidyNode {
-	*new { |pattern|
-		var instance = super.new("chord");
-		instance.add(JSTidyPattern(pattern));
-		^instance;
-	}
+	*new { |pattern| ^super.new("chord").add(JSTidyPattern(pattern)) }
 
-	get { |cycle|
-		var chords = children.first.get(cycle);
+	get { |cycle, name|
+		var time, chords = children.first.get(cycle, name);
 
+		time = 0;
 		cycle.steps.do { |step|
-			var chord = chords.stepAt(step.on);
-			step.put(\chord, chord.at(\string) ? "0");
-			step.put(\strum, (chord.at(\number) ? 0).asInteger / 20);
-		}
-
+			var chord = chords.at(time);
+			step.put(\chord, chord.at(\str) ? "0");
+			step.put(\strum, (chord.at(\num) ? 0).asInteger);
+			time = time + step.delta;
+		};
 		^cycle;
 	}
 }
 
-// ~a << "jux 0.6" |> "rev" | ...
+// ~a < "jux 0.6" |> "rev" | ...
 JSTidyFP_Jux : JSTidyNode {
 	var <>by;
 
 	*new { |pat|
-		var instance = super.new("jux");
 		var by=0.5;
 		if(pat.size > 0, { by = pat.split($ ).at(0).asFloat });
-		^instance.by_(max(0, min(1.0, by)));
+		^super.new("jux").by_(max(0, min(1.0, by)));
 	}
 
 	become_cur_after_add { ^true }
 
-	get { |cycle|
-		var org, alt, steps, pq=PriorityQueue.new;
+	get { |cycle, name|
+		var time, org, alt, steps, pq=PriorityQueue.new;
 
-		org = children.last.get(cycle); // the cycle from the JSTidyBranch
-		org.steps.do { |step| pq.put(step.on, step.put(\pan, -1 * by)) };
+		org = children.last.get(cycle, name); // from the JSTidyBranch
 
-		// calculate shifted steps for the alt cycle
+		// put steps of the org cycle in the PriorityQueue
+		time = 0;
+		org.steps.do { |step|
+			pq.put(time, step.put(\pan, -1 * by));
+			time = time + step.delta;
+		};
+
+		// calculate steps for the alt cycle
 		alt = org.deepCopy;
 		children.drop(-1).do { |child| alt = child.get(alt) };
-		alt.steps.do { |step| pq.put(step.on, step.put(\pan, by)) };
 
-		steps = [];
-		while { pq.notEmpty } { steps = steps.add(pq.pop) };
+		// put steps of the alt cycle in the PriorityQueue
+		time = 0;
+		alt.steps.do { |step|
+			pq.put(time, step.put(\pan, by));
+			time = time + step.delta;
+		};
 
-		^cycle.steps_(steps);
+		^JSTidyCycle(this.steps_from_priority_queue(pq));
 	}
 }
 
-// ~a << "off 0.25" |+ "n 7" | ..
+// ~a < "off 0.25" |+ "n 7" | ..
 JSTidyFP_Off : JSTidyNode {
 	var <>shift, <>stack;
 
 	*new { |pat|
-		var instance = super.new("off");
-		^instance.shift_(max(0, min(1.0, pat.split($ ).at(0).asFloat)));
+		^super.new("off")
+		.shift_(max(0, min(1.0, pat.split($ ).at(0).asFloat)));
 	}
 
 	become_cur_after_add { ^true }
 
-	get { |cycle|
-		var org, alt, steps, pq=PriorityQueue.new;
+	get { |cycle, name|
+		var time, org, alt, steps, pq=PriorityQueue.new;
 
+		org = children.last.get(cycle, name); // from the JSTidyBranch
+
+		// add steps of org cycle to PriorityQueue
+		time = 0;
+		org.steps.do { |step|
+			pq.put(time, step);
+			time = time + step.delta;
+		};
+
+		// add steps of the stack + alt cycle to PriorityQueue
+		stack ?? { stack = [ JSTidyStep(0, shift, shift, "~", 0) ] };
+		time = 0;
 		stack.do { |step|
-			step.on = step.on - 1;
-			pq.put(step.on, step);
+			pq.put(time, step);
+			time = time + step.delta;
 		};
 		stack = [];
 
-		org = children.last.get(cycle); // the cycle from the JSTidyBranch
-		org.steps.do { |step| pq.put(step.on, step) };
-
 		// calculate shifted steps for the alt cycle
 		alt = org.deepCopy;
-		children.drop(-1).do { |child| alt = child.get(alt) };
+		children.drop(-1).do { |child| alt = child.get(alt, name) };
+
+		// continue with the time from adding stack items to PriorityQueue
 		alt.steps.do { |step|
-			step.on = step.on + shift;
-			if(step.on > 1, {
-				stack = stack.add(step);
-			}, {
-				pq.put(step.on, step);
-			});
+			case
+			{ time > 0.999 } { stack = stack.add(step) }
+			{ (time + step.delta) > 0.999 } {
+				// split the step and add some silence to the stack
+				var d = time + step.delta - 1;
+				stack = stack.add(step.deepCopy.delta_(d).trig_(0));
+				step.delta_(1 - time); // the duration remains longer
+				pq.put(time, step);
+			} {
+				pq.put(time, step);
+			};
+			time = time + step.delta;
 		};
 
-		steps = [];
-		while { pq.notEmpty } { steps = steps.add(pq.pop) };
-
-		^cycle.steps_(steps);
+		^JSTidyCycle(this.steps_from_priority_queue(pq));
 	}
 }
 
-// keep \on and \dur, but reverse the dictionary!
+// reverse the dictionary
 JSTidyFP_Rev : JSTidyNode {
-	*new { |pattern| ^super.newCopyArgs("rev") }
+	*new { |pattern| ^super.new("rev") }
 
-	get { |cycle|
-		var dicts=[];
-		cycle.steps.do { |step| dicts = dicts.add(step.dict) };
-		dicts = dicts.reverse;
+	get { |cycle, name|
+		var dicts = cycle.steps.collect { |step| step.dict };
+		dicts = (dicts ? []).reverse;
 		cycle.steps.do { |step| step.dict_(dicts.removeAt(0)) };
 		^cycle;
 	}
 }
 
-// ~a << "slice 8 1 2 3 4" | ...
+// ~a < "slice 8 1 2 3 4" | ...
 JSTidyFP_Slice : JSTidyNode {
 	var <>count;
 
@@ -708,21 +890,24 @@ JSTidyFP_Slice : JSTidyNode {
 	// so you look up what sample to play in the input cycle
 	// slice will adjust duration to play the whole slice (may overlap)
 	// param splice > 0 will adjust \rate instead @see \playbuf synthdef
-	get { |cycle|
-		var input = children.last.get(cycle); // a branch
-		cycle = children.first.get(cycle); // holds structure
+	get { |cycle, name|
+		var time, input = children.last.get(cycle, name); // branch
+		cycle = children.first.get(cycle, name); // holds structure
 
+		time = 0;
 		cycle.steps.do { |step|
-			var slice, step2 = input.stepAt(step.on);
+			var slice, step2 = input.at(time);
 
-			slice = (step.at(\string) ? 0).asInteger; // what slice to play
-			step.put(\string, nil);
-			step.put(\number, nil); // could use this for bufnum..
-			step2 !? { step.putAll(step2.dict) }; // bufnum, degree, def etc
+			slice = (step.at(\str) ? 0).asInteger; // what slice to play
+			step.put(\str, nil);
+			step.put(\num, nil); // could use this for bufnum..
+			step2 !? { step.putAll(step2.dict) }; // bufnum,degree,def etc
 
 			step.put(\begin, max(0, min(slice, count - 1)) / count);
 			step.put(\end, max(1, min(slice + 1, count)) / count);
 			step.put(\legato, 1); // in order for splice to work
+
+			time = time + step.delta;
 		};
 
 		^cycle;
@@ -733,18 +918,20 @@ JSTidyFP_Every : JSTidyNode {
 	var <>when, turn;
 
 	*new { |pattern|
-		var instance = super.new("every");
-		^instance.when_(pattern.split($ ).at(0).asInteger);
+		^super.new("every").when_(pattern.split($ ).at(0).asInteger);
 	}
 
 	become_cur_after_add { ^true }
 
-	get { |cycle|
-		cycle = children.last.get(cycle); // should be a JSTidyBranch
+	get { |cycle, name|
+		cycle = children.last.get(cycle, name); // should be a JSTidyBranch
 
+		// let your children alter the cycle when it is your turn
 		turn = (turn ? -1) + 1;
 		if((turn % when) == 0, {
-			children.drop(-1).do { |child| cycle = child.get(cycle) };
+			children.drop(-1).do { |child|
+				cycle = child.get(cycle, name)
+			};
 		});
 
 		^cycle;
@@ -756,11 +943,10 @@ JSTidyFP_Dx7 : JSTidyNode {
 	var <>preset;
 
 	*new { |pattern|
-		var instance = super.new("dx7");
-		^instance.preset_(pattern.split($ ).at(0).asInteger);
+		^super.new("dx7").preset_(pattern.split($ ).at(0).asInteger);
 	}
 
-	get { |cycle|
+	get { |cycle, name|
 		cycle.steps.do { |step|	step.put(\dx7, preset) };
 		^cycle;
 	}
@@ -781,14 +967,15 @@ JSTidyFP : JSTidyNode {
 		^instance;
 	}
 
-	get { |cycle|
+	get { |cycle, name|
 		// return a cycle with value from your pattern filled in for val
-		cycle = children.first.get(cycle);
+		cycle = children.first.get(cycle, name);
 		cycle.steps.do { |step|
-			step.at(\string) !? { |str|
+			step.at(\str) !? { |str|
 				if((str.size > 1).and(str.at(0) == $~), {
 					// str is like ~xxx: do nodeproxy.bus.asMap
-					var proxy = currentEnvironment.at(str.drop(1).asSymbol);
+					var proxy;
+					proxy = currentEnvironment.at(str.drop(1).asSymbol);
 					proxy.kr(1); // could be a new proxy, so initialize it
 					step.put(val.asSymbol, proxy.bus.asMap);
 				}, {
@@ -800,8 +987,9 @@ JSTidyFP : JSTidyNode {
 					}
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "note" } {
-						if((str.size == 2).and("abcdefg".indexOf(str[0]).notNil), {
-							str = str[0].asString ++ str[1].asInteger.asString;
+						var ch = str[0];
+						if((str.size == 2).and("abcdefg".contains(ch)), {
+							str = ch.asString ++ str[1].asInteger.asString;
 							step.put(\midinote, str.notemidi);
 						}, {
 							step.put(\note, str.asFloat);
@@ -811,12 +999,13 @@ JSTidyFP : JSTidyNode {
 					{ val == "speed" } {
 						step.put(\speed, str.asFloat.midiratio)
 					}
-					//{ val == "slow" } { step.put(\slow, str.asFloat) }
-					{ step.put(val.asSymbol, str.asFloat) }
+					{ step.put(val.asSymbol, str.asFloat) };
+
+					if(str == "~") { step.trig = 0 };
 				});
 			};
 
-			step.at(\number) !? { |num|
+			step.at(\num) !? { |num|
 				case
 				{ val == "snd"   } { step.put(\buf,  num.asInteger) }
 				{ val == "note"  } { step.put(\oct,  num.asInteger) }
@@ -825,50 +1014,37 @@ JSTidyFP : JSTidyNode {
 				{ }
 			};
 
-			step.put(\string, nil);
-			step.put(\number, nil);
+			step.put(\str, nil);
+			step.put(\num, nil);
 		};
+		
 		^cycle;
 	}
 }
 
 
 /*
-	<< "juxby 0.5 (rev)" | bla bla
-	jux changes the right channel
-	plays original cycle panned left 0.5
-	plays reversed cycle panned right 0.5
-	juxby 0 would play them both in the center
-	juxby 1 is the default ("juxby" or "jux")
-
-	<< "off 0.25, rev" | bla bla
-	plays the original cycle
-	plays the reversed cycle on top, but 1/4 cycle later in time
-
-	quark : "Tidy" : Tidal Cycles syntax for SuperCollider
-
 	inline effects: how to do it: reserve some slots maybe?
 */
 
 /*
-	When evaluated in the interpreter, the "<<" operator for
+	When evaluated in the interpreter, the "<" operator for
 	NodeProxy creates a new JSTidy object around the NodeProxy.
 	As the interpreter works from left to right, the next
 	operator will then be handled by that JSTidy object.
 	This goes on and on as more operators are encountered, and
 	this way, a tree of objects is built inside the JSTidy object.
+
 	The last "operator" is the "printOn" message, that is called
 	by the interpreter when all the code has been interpreted.
 	It should return a string, to be displayed in the post window.
-	During the printOn method, a new Task is started, that will
-	generate and run JSTidyCycle's (bars) of JSTidyStep's, that will
-	launch synths on the server.
-	The Task is set as the source for the NodeProxy.
-	If new code is evaluated for the NodeProxy, the Task will be
-	replaced by a new one. The old one will be stopped by the
-	NodeProxy.
 
-	So, you can use JSTidy if you use the "<<" operator on a NodeProxy.
+	During the printOn method, a new Routine is started, that will
+	generate and run JSTidyCycle's (bars) of JSTidyStep's, that will
+	launch synths on the server. The synths will receive the bus index
+    of the proxy as \out parameter.
+
+	So, you can use JSTidy if you use the "<" operator on a NodeProxy.
 	You can still use NodeProxy the normal way.
 */
 
@@ -878,8 +1054,8 @@ JSTidyFP : JSTidyNode {
 
 + NodeProxy {
 
-	// the < operator + a function string results in a JSTidy object
-	// the interpreter will move on to the next operator
+	// the < operator + a function string results in a JSTidy object.
+	// then, the interpreter will move on to the next operator
 	// invoking it on the JSTidy object that was just created.
 	< { |input|
 		
@@ -889,7 +1065,18 @@ JSTidyFP : JSTidyNode {
 			^JSTidy(this).add_branch("<<").add_func(input)
 		});
 
-		// assume array: create JSTidy object + proxy for each element
+		input.postln;
+	}
+
+	// a control proxy
+	<< { |input|
+		
+		this.kr(1); // make sure to allocate the control bus
+		
+		if(input.class == String, {
+			^JSTidy(this).add_branch("<<").add_func(input)
+		});
+
 		input.postln;
 	}
 
@@ -897,24 +1084,62 @@ JSTidyFP : JSTidyNode {
 		// avoid conflict with send slotnumbers, which are bus index + 10
 		var slot = Server.default.options.numAudioBusChannels + 10;
 		this.ar(2);
-		this.fadeTime_(4);
+
 		if(func_or_symbol.isFunction, {
 			this.put(slot, \filterIn -> func_or_symbol);
 		}, {
-			// assume synthdef using ReplaceOut
 			this.put(slot, func_or_symbol.asSymbol, 0, extra_args);
 		});
-
-		// add your key in the currentEnvironment to JSTidy.fxnames
-		// JSTidyStep.play needs fxnames to install sends to them
-		JSTidy.fxnames = (JSTidy.fxnames ?? []).add(
-			currentEnvironment.findKeyForValue(this)
-		);
 	}
 
-	> { |str| JSTidy.send(this, str)	}
+	to { |str, gain=1.0|
+		var to, slot;
+
+		this.ar(2); // make sure we have a bus index
+
+		slot = this.bus.index + 10;
+
+		to = currentEnvironment.at(str.asSymbol);
+		if(to.objects.at(slot).isNil, {
+			to.put(slot, \mix -> { this.ar });
+		});
+
+		to.set(("mix"++(slot)).asSymbol, gain.asFloat);
+	}
 	
-	hush { JSTidy.hush(bus.index) }
+	> { |str|
+		str.split($ ).clump(2).do { |pair|
+			this.to(pair[0], pair[1].asFloat);
+		}
+	}
+
+	hush { |fade=0|
+		if(fade < 0.02) {
+			JSTidy.hush(bus.index);
+		} {
+			Routine({
+				// fade out the audio on the nodeproxy bus
+				// add 11 to so that this will also work for fx proxies
+				var slot = Server.default.options.numAudioBusChannels + 11;
+				this.put(
+					slot,
+					\filter -> { |in| Line.ar(1,0,fade,in,0,2) }
+				);
+				// wait for the fadeout to be almost done
+				(fade - 0.01).wait;
+				// stop the routine from triggering new steps
+				JSTidy.hush(bus.index);
+				// remove the fadeout so that proxy is ready for use again
+				this.put(slot, nil);
+			}).play
+		}
+	}
+
+	
+}
+
++ Symbol {
+	-- { |str| ^JSTidyTree.new.add_branch("--").add_func(str) }
 }
 
 + ProxySpace {
@@ -947,7 +1172,8 @@ JSTidyFP : JSTidyNode {
 			fade.wait;
 			JSTidy.stop;
 			1.wait;
-			this.clear.pop
+			this.clear.pop;
+			"hushed".postln;
 		} .play
 	}
 }

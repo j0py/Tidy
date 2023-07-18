@@ -33,6 +33,18 @@ JSSamples {
 		^"";
 	}
 
+    *logbank { |bank|
+		"bank %".format(bank.asString.quote).postln;
+		Library.at(\samples, bank.asSymbol).order.do { |k|
+			var path = Library.at(\samples, bank.asSymbol, k).path;
+			path = path.split($/).last;
+			path = path.split($-).last;
+			path = path.stripWhiteSpace;
+			"% %".format(k.asString.padLeft(2), path.quote).postln;
+		};
+		^"";
+	}
+
 	*buf { |bank, index|
 		bank ?? { ^nil };
 		index ?? { ^nil };

@@ -37,11 +37,11 @@ p = ProxySpace.push(s).config(70, 4)
 
 // trigger sounds, and send them to "inputs" of the mixer:
 
-~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "raw 0.1" - "comb 0.01"
+~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "~raw 0.1" - "~comb 0.01"
 
-~b < "buf 2" - "snd k2" - "raw 0.2"
+~b < "buf 2" - "snd k2" - "~raw 0.2"
 
-~c < "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "raw 0.02" - "room 0.02" - "legato 2"
+~c < "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "~raw 0.02" - "~room 0.02" - "legato 2"
 
 // end everything (8 seconds fadeout)
 
@@ -90,16 +90,9 @@ JSSamples.bufnum(\animals, 12)
 
 The first thing i started working on is the mini-notation.
 
-At the moment (05-2023), the following is supported:
-- s:n syntax, where "s" is the "bank" of the sound, and "n" the index, but "s" can also be the synthdef, and "n" in that case the degree to play.
-- ```[1 2 3 4]``` nesting multiple notes into one
-- ```<1 2 3 4>``` alternate nested notes for each next cycle
-- the ```/2.11``` and ```*3.2``` to make notes longer or shorter
-- the ```~``` is a rest (when followed by a space) or a nodeproxy
-- the ```_``` prolonges the previous note
-- ```{1 2 3 4}%5``` polyrhythm
-- ```1(3,8,2)``` euclydian rhythm (but.. the numbers cannot (yet) be patterns)
-- ```2!4``` repeats a node n times
+You can find the full specification for this in the TidalCycles website: http://tidalcycles.org/docs/reference/mini_notation/ . At this time (07-2023) everything is supported, except the "marking your feet" option where you can use a "." to create groups instead of "[]" brackets.
+
+Earlier this year (05-2023) i did not have patternable euclidian option yet, but after a rewrite of the parser inspired by this website (https://supunsetunga.medium.com/writing-a-parser-getting-started-44ba70bb6cc9) it became possible to have the euclidian syntax patternable, for example: "bd(<3 5>/16, 8)/2" will work.
 
 Usage:
 ```
@@ -108,77 +101,43 @@ x = JSMini("1 2 <3 6> 4")
 x.next_cycle
 x.next_cycle
 ```
-Each call to "next_cycle" will return a JSMiniCycle object, containing JSMiniStep objects. A JSMiniStep object has the following values:
-- "on" : time in cycles at which the step starts, usually between 0 and 1
-- "dur" : duration of the step in cycles
+Each call to "next_cycle" will return an array of steps, where each step is an array by itself, holding these values: trig, delta, dur, str, num;
+- "trig" : if the step should play, or just occupy time silently
+- "delta" : the amount of time that should pass before the next step is played
+- "dur" : the duration of the step in cycles (how long does it "sound")
 - "string" : the string portion of a note (from the "ss:n" format)
 - "number" : the number portion of a note
-- "type" : can be "note", "rest" or "space". only internally used.
 
 The example above should result in cycles "1 2 3 4" and "1 2 6 4".
 
-The JSMiniCycle with its steps is used in Pmini and JSTidy to do their thing.
+JSMini is used in Pmini and JSTidy to do their thing.
 
-The ```logroot``` method will log the internal tree that has been parsed to the post window.  
-The pattern "1 2 <3 6> 4" will result in this "tree":
+The ```log_nodes``` method will log the internal tree that has been parsed to the post window.  
 
-```
-JSMiniRoot 0/0/0 "" 0 (0,0,0)                
---JSMiniNote 0/0/0 "1" 0 (0,0,0)             
---JSMiniNote 0/0/0 "2" 0 (0,0,0)             
---JSMiniTurns 0/0/0 "" 0 (0,0,0)             
-----JSMiniNote 0/0/0 "3" 0 (0,0,0)           
-----JSMiniNote 0/0/0 "6" 0 (0,0,0)           
---JSMiniNote 0/0/0 "4" 0 (0,0,0)             
-```
-For every node in the tree, you see it's class name, followed by:  
-- values for slower, faster, repeat
-- the string and number part
-- the euclid numbers (x,y,z)
+The ```log_tokens``` method will log what tokens have been parsed from the pattern specification.
 
 The ```log(n)``` method will log the first n cycles to the post window.  
-```JSMini("1 2 <3 6> 4").log(3)``` looks like this:
-```
-cycle 0
-on     dur    str num                        
-0.0    0.25   "1" 0                          
-0.25   0.25   "2" 0                          
-0.5    0.25   "3" 0                          
-0.75   0.25   "4" 0                          
-cycle 1                                      
-on     dur    str num                        
-0.0    0.25   "1" 0                          
-0.25   0.25   "2" 0                          
-0.5    0.25   "6" 0                          
-0.75   0.25   "4" 0                          
-cycle 2                                      
-on     dur    str num                        
-0.0    0.25   "1" 0                          
-0.25   0.25   "2" 0                          
-0.5    0.25   "3" 0                          
-0.75   0.25   "4" 0     
 ```
 These functions can be used to test if JSMini is working as expected, and if not, where it may go wrong.
 
 ### Inner working
 
-The given pattern string is parsed to a tree of objects, and then the root of that tree is asked for the next cycle (a bunch of steps). The root uses it's children to get their steps and so on. The different types of objects in the tree (SC classes) go about differently when asked for their steps. This way, the nesting, alternating and such has been implemented.
+The given pattern string is parsed to a tree of objects, and then the root of that tree is asked for the next cycle (a bunch of steps). The root uses it's children to get their steps and so on. Each child may have different parameters that will make it generate steps differently.  
+This way, the nesting, alternating and such has been implemented.
 
 Things can get pretty complicated if you can do things like "1 2 3/5.11 4".  
 The third step should play a lot more slow than steps 1 2 and 4. What JSMini does is, it reserves a quarter of the cycle for each step, and if a step wants to play slower, then it may do so within the time that has been reserved for it.  
 
-So if for example step 3 is like "3/2", then in the first quarter cycle, it will trigger at the beginning of that quarter. But it will not fit in that quarter, so the remaining time (not fitting in the quarter) is calculated, and remembered in the step object in the parse-tree. The next time this step get's a chance to play in a quarter cycle, it will first check if there still is remaining time to wait out. So first this waiting time is "consumed", and when that has happened, then the step will trigger once again. This may happen at any speed, so "1 2 3/8.4362 4" is perfectly possible (but could you dance to it? :).
+So if for example step 3 is like "3/2", then in the first quarter cycle, it will trigger at the beginning of that quarter. But it will not fit in that quarter, so the remaining time (not fitting in the quarter) is calculated, and remembered in the step object in the parse-tree. The next time this step get's a chance to play in a quarter cycle, it will first check if there still is remaining time to wait out. So first this waiting time is "consumed", and when that has happened, then the step will trigger once again. This may happen at any speed, so "1 2 3/8.4362 4" is perfectly possible.
 
 Playing faster works the same: the quarter cycle is filled with triggered steps until it has been filled completely. It's like filling a bucket (quarter of a step) with water (time). When there is water left over after the bucket is full, it is kept for the next bucket.
 
-The "_" results in a Space node object in the tree. The duration of this step is added to the duration of the previous one, which will then last longer. This works within one cycle, but also over to the next cycle.
+The "_" results in a Space node object in the tree. The duration of this step is added to the duration of the previous step, which will then last longer. This works within one cycle, but also over to the next cycle.
 Consider a pattern like ```"<_ 1> 2 _ 3"```: every other cycle, step "3" lasts 1/2 step.
 
 Another thing i encountered with the alternating steps is, that you cannot use the cycle number to select the alternative.I did that at first using a modulo (%) operation: for 2 alternatives, use ```cycle % 2```.  
 If you do that, then a pattern like ```"1 2 <3 <4 5>> 6"``` will result in "1 2 3 6", "1 2 5 6", "1 2 3 6" etc, but never "1 2 4 6". This because "<4 5>" will only be selected when the cycle number is odd, and within this step, "5" will thus always be selected.  
-In JSMini, the JSMiniTurns object in the tree counts "turns" by itself (and only for itself). And uses that for the modulo operation. And then you will get "1 2 3 6", "1 2 4 6", "1 2 3 6", "1 2 5 6", etc. Fun, isn't it?
-
-I read a blog yesterday on how to write a compiler, splitting it up in a reader, lexer, parser and errorhandler. I want to make the mininotation parser and the tidy parser that way. It could become more robuust and better expandable then.
+In JSMini each node in the tree counts cycles by itself: each call to the "make more steps" method will increment it. The step uses that for the modulo operation. And then you will get "1 2 3 6", "1 2 4 6", "1 2 3 6", "1 2 5 6", etc.
 
 ## JSTidy
 
@@ -260,13 +219,15 @@ You must send the sound somewhere, or you will not hear it. Hence "raw 0.3".
 
 The ```#``` sign is not possible in SC Interpreter, i replaced it with ```-```, which also looks quite tidy :).
 
-The "<" function has been added to NodeProxy to get things going. The Interpreter first encounters ```~a```, which results in a NodeProxy (we are in a ProxySpace). The "<" method on the proxy is called, with a String argument.  
+The "<" function has been added to NodeProxy to get things going. The Interpreter first encounters ```~a```, which results in a NodeProxy (we are in ProxySpace). The "<" method on the proxy is called, with a String argument.  
 The String argument has this format: ```<function name> <pattern>```.  
 
 The "<" method creates a JSTidy object around the proxy, and this JSTidy object will handle the function and the pattern. Yep, it starts building a tree again.  
-The result so far is that JSTidy object, and the Interpreter continues to the ```-``` operator. Of course, the JSTidy object has this method, and it will accept, uh, a String as argument. JSTidy processes the String (containing again a function name and a pattern), and this can be repeated as required, calling many functions with many patterns. Finally, the code to interpret is all done, and then the Interpreter will call ```printOn``` on the JSTidy object, so that something is written to the post window. And in the implementation of the ```printOn``` method, i have the opportunity to start a Routine that will play cycles.
+The result so far is that JSTidy object, and the Interpreter continues to the ```-``` operator. Of course, the JSTidy object has this method, and it will accept, again, a String as argument. JSTidy processes the String (containing again a function name and a pattern), returns itself, and then this can be repeated as required, calling many functions with many patterns. Each function stores something inside the tree that is built up inside the JSTidy object.
 
-Sneaky and hacky, but reliable enough.
+Finally, the code to interpret is all done, and then the Interpreter will call ```printOn``` on the resulting JSTidy object, so that something is written to the post window. And in the implementation of the ```printOn``` method, i have the opportunity to start (or replace a running-) a Routine that will play the cycles.
+
+Sneaky and hacky, but reliable.
 
 #### Functions supported by the JSTidy class
 

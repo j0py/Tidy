@@ -1,44 +1,25 @@
 /*
-Generates steps from a mini notation string.
-Each step has 4 values : on, dur, string, number.
+Takes a mini notation string as input.
 Returns a pattern that can be used in a Pbind.
+The pattern has 5 values:
+
+\trig : 1 should trigger a note, 0 should not
+\delta: how long to wait before processing the next step
+\dur  : value to calculate the sustain for a step
+\str  : string value for a step
+\num  : integer value for a step
 
 Example:
 Pbind(
-    [\on, \dur, \str, \num], Pmini("1 2 3 4"),
-	\degree, Pfunc({ |e| e.str.asInteger }),
-	)
+    [\trig, \delta, \dur, \str, \num], Pmini("1 2 3 4"),
+	\degree, Pfunc({ |e| if(e.trig > 0) { e.str.asInteger } { \rest } }),
+)
 
 */
-Pmini
-{
+Pmini {
 	*new { |mini_notation|
-		var seq = JSMini(mini_notation);
+		var parser = JSMiniParser(mini_notation).parse;
 		
-		^Pn(
-			Plazy({
-				var time=0, steps;
-				
-				// Insert rests where needed to completely
-				// fill up the time. Pbinds like that very much.
-				steps = List.new;
-				
-				seq.next_cycle.steps.do { |step|
-					if(step.on > time, {
-						steps.add([step.on - time, \rest, 0]);
-					});
-					
-					steps.add([step.dur, step.string, step.number]);
-
-					time = step.on + step.dur;
-				};
-
-				if(1 > time, { steps.add([1 - time, \rest, 0]) });
-
-				// return a Pseq for the steps
-				Pseq(steps.asArray, 1);
-			}),
-			inf
-		)
+		^Pn(Plazy({	Pseq(parser.next_cycle, 1) }), inf)
 	}
 }
