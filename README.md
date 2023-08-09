@@ -77,27 +77,27 @@ This file contains the JSTidy class (and supporting classes), and some extension
 
 I added a few operators on NodeProxy and ProxySpace to create a "mixer" with "effects", and to enable chaining the function/pattern pairs inside the SuperCollider Interpreter, like Tidal Cycles.
 
-##### fx(function_or_symbol, extra_args)
+```fx(function_or_symbol, extra_args)```
 
 The fx function installs a synth at the end of the slots of the NodeProxy. If you give it a Function object, then it will use the NodeProxy \filterIn role. If you use a Symbol, then it expects that to be the name of a SynthDef that uses ReplaceOut at the end, and puts that at the end of the slots chain.
 
-##### to(str, gain=1.0)
+```to(str, gain=1.0)```
 
 This method will send signal from this NodeProxy to the (other) NodeProxy with the given name in the "str" parameter.
 
-##### > (str)
+```> (str)```
 
 Sends the signal from this NodeProxy to other NodeProxies that have been specified in (str). The (str) is split into an array of substrings, separated by spaces. The substrings are paired (clumped), and each pair denotes the name of a NodeProxy to send to and a floating point number, which is the gain. ```"~room 0.2 ~raw 0.8"```
 
-##### < (str)
+```< (str)```
 
 Initializes the NodeProxy to audio rate and then adds the function + pattern in (str) to a new JSTidy object that is created around the NodeProxy.
 
-##### << (str)
+```<< (str)```
 
 Initializes the NodeProxy to control rate and then adds the function + pattern in (str) to a new JSTidy object that is created around the NodeProxy.
 
-##### hush(fadeTime)
+```hush(fadeTime)```
 
 Fades out the signal of this NodeProxy and stops the Routine that is triggering sounds on it.
 
