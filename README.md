@@ -105,7 +105,7 @@ Fades out the signal of this NodeProxy and stops the Routine that is triggering 
 
 The correct Order of Execution is done by using the slot numbers of the NodeProxies. This let's you add new FX's and/or new playing proxies while everything else is playing, and you do not have to worry about what you do first. I haven't tried to find how NodeProxies do this internally, but as far as i can see (ahum, hear) it works.
 
-The only problem is what slotnumbers to use when sending signal from ANY proxy to ANY other proxy in ANY order. The slotnumber must be a unique number. After some time i thought of this trick: the index of the private bus of a proxy is unique among all proxies and its index can be used as a unique slot number for that proxy on any other proxy.
+The only problem is what slotnumbers to use when sending signal from ANY proxy to ANY other proxy in ANY order. The slotnumber must be a unique number. After some time i thought of this trick: the private bus of a proxy is unique in the server and so its index can be used as a unique slot number for that proxy on any other proxy.
 
 ```
 ~fx[~source.bus.index + 10] = \filterIn -> { |in| ~source * gain }
@@ -122,7 +122,7 @@ p = ProxySpace.push(s);
 ~raw.fx { |in| in } > "~out 0.8";
 ```
 This "mixer" has proxy ~out playing to hardware bus, and proxy ~raw playing to ~out with a gain of 0.8. If you send audio to ~raw, it will be played to ~out, and then your speakers. You can extend this like ever you want.
-Maybe a "~hpf" effect for all sounds except kick and bass.
+Maybe a "~hpf" effect for all sounds except kick and bass to keep the mix a bit clear at the low end?
 
 The fx() function supports supplying a Function, like above, but you can also give it a symbol (+ extra params array), which will be taken for a SynthDef name.
 ```
@@ -131,9 +131,11 @@ The fx() function supports supplying a Function, like above, but you can also gi
 
 #### ProxySpace
 
-On ProxySpace i added method ```config(bpm, bpb)```, which installs a TempoClock with a tempo according to "bpm" (beats per minute), and also sets quantization according to "bpb" (beats per bar). I am not satisfied with this method, and if the creation of the ProxySpace ever moves int some setup.scd file, then i will remove the config function and just do things in the setup.scd file just after creating the ProxySpace.
+```config(bpm, bpb)```
+Installs a TempoClock with a tempo according to "bpm" (beats per minute), and also sets quantization according to "bpb" (beats per bar). I am not satisfied with this method, and if the creation of the ProxySpace ever moves into some setup.scd file, then i will remove the config function and just do things in the setup.scd file just after creating the ProxySpace.
 
-Method ```hush(<fadetime>)``` is also added to ProxySpace. A short way to hush all NodeProxies.
+```hush(<fadetime>)```
+A short way to hush all NodeProxies.
 After hush you should ```pop()``` the ProxySpace to return to the original SuperCollider environment.
 And after popping, you can push a new ProxySpace and start over.
 
@@ -143,10 +145,10 @@ And after popping, you can push a new ProxySpace and start over.
 
 ```d1 $ s "bd sn" ``` Will never work -as is- in the Interpreter.
 
-I want to use NodeProxies anyway, so there will be differences.  
+I want to use NodeProxies anyway, so there will be differences with Tidal Cycles.  
 What i have so far is this:
 ```
-~a < "s bd sn" - "~raw 0.3"
+~a < "sound bd sn" - "~raw 0.3"
 ```
 You must send the sound somewhere, or you will not hear it. Hence "~raw 0.3".
 
@@ -177,7 +179,7 @@ Everywhere where i wrote "-" operator, you could also use "|>", "|+", "|*", "|<"
 
 The Seq function takes a pattern of indices, and plays the fragments that the indices point to one after the other.
 
-After interpreting ```~a < "seq 0 1 2 1"``` the Interpreter invokes the "--" operator on the JSTidy object, with an array as parameter. The "--" operator will make the elements of the array children of the preceding function/pattern in its inernal tree (the Seq in this case). But first, the Interpreter will interpret the array elements one by one.
+After interpreting ```~a < "seq 0 1 2 1"``` the Interpreter invokes the "--" operator on the JSTidy object, with an array as parameter. The "--" operator will make the elements of the array children of the preceding function/pattern in its internal tree (the Seq in this case). But first, the Interpreter will interpret the array elements one by one.
 
 For this, the Symbol class has also received a new "--" operator: it will create a new JSTidyTree object, which will process the first function/pattern string and then return itself. The Interpreter will then invoke the "-" operator on that as before. Finally, the array will have become an array of JSTidyTree objects, each with its own tree built inside of it.
 
@@ -209,7 +211,7 @@ SynthDef(\bla, {
 }).add
 ```
 
-If a proxy (say ~a) encounters a send (recognizeable by the function name starting with a "~") like "~reverb 0 1", then:
+If a proxy "~a" encounters a send (recognizeable by the function name starting with a "~") like "~reverb 0 1", then:
 - the ~reverb proxy is created if it does not yet exist
 - another proxy is created, specifically for sending signal from ~a to ~reverb
 - the name of that proxy in ProxySpace will be "~a_reverb"
@@ -221,9 +223,9 @@ If you do not add the extra Out's to your SynthDef, effects will not be sent, th
 If you remove the send and the re-evaluate, the extra proxy will remain in place. Proxy ~a will write nothing to its bus, because you removed the send. It will be silent.  
 So it costs extra buses on the server, but we've got 1024 (or more if you want) of those..
 
-#### Functions supported by the JSTidy class
+#### Functions supported by the JSTidy
 
-Today (2023-08-09) i have these functions implemented:
+Today (2023-08-09) i have these functions implemented, but they need some thorough testing:
 
 - sends (as described earlier)
 - jux ```~a < "jux 0.6" |> "rev" | etc ```
@@ -234,7 +236,12 @@ Today (2023-08-09) i have these functions implemented:
 - slice ```~a < "slice 8 1 2 3 4" | etc```
 - every ```~a < "every 4" |> "rev" | "n 1 2 3 4" - etc```
 
-There is a dx7 function in the code, and you can set a preset to use, but is costs too much cpu so maybe i will remove it again.
+You might notice the "|" operator used now and then. That is the replacement for the "$" operator of Tidal Cycles. It means that all stuff after the "|" is generated first, and then the stuff before the "|" can do stings with it.
+So, normally, everything is interpreted from left to right, but using the "|" operator can break through that.
+
+```~a < "off 0.25" |+ "n 7" - "rev" | etc ```
+
+The "etc" bit is first asked for the next cycle, and then that cycle is messed up by the "off" function and combined other functions.
 
 The rules for function names are (up until now):
 - if the name of a function starts with a "~", then it is treated as a send.
