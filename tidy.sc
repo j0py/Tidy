@@ -355,19 +355,12 @@ JSTidyStep {
 		/ (dict.at(\fast) ? 1);
 		dict.put(\secs, sustain / proxy.clock.tempo);   // in seconds
 
-		// TODO: here is a chance to play it to some other bus
-		// because of some fx you want. or multiple buses.
-		// synthdefs could support \out, \out2, \out3, etc
-		// and also \gain, \gain1, \gain2 etc
-		//
-		// Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-		//
-		dict.put(\out, proxy.bus.index);
+		dict.put(\out, proxy.bus.index); // the main output
 
-		sends.keys.do { |fx, i|
-			var gain = sends.at(fx);
-			fx = currentEnvironment.at(fx.asSymbol);
-			dict.put(("send"++((i+1).asString)).asSymbol, fx.bus.index);
+		sends.keys.do { |sendname, i|
+			var gain = sends.at(sendname);
+			var bus = currentEnvironment.at(sendname.asSymbol).bus;
+			dict.put(("send"++((i+1).asString)).asSymbol, bus.index);
 			dict.put(("gain"++((i+1).asString)).asSymbol, gain.asFloat);
 		};
 
@@ -634,11 +627,14 @@ JSTidySend : JSTidyNode {
 
 	get { |cycle, name|
 		var time, gains = children.first.get(cycle, name);
-		var sendname = (name ++ val).asSymbol;
+		var sendname = (name ++ "_" ++ val).asSymbol;
 
 		// create a separate proxy to send signal to the fx for this proxy
-		currentEnvironment.at(sendname).to(val);
-		
+		currentEnvironment.at(sendname).to(val); // gain = 1
+
+		// store the sends in the step objects by calling send() method
+		// during step.play, all the sends will be added to the dict of the step
+		// and then the values will be fed to the synth on the server.
 		time = 0;
 		cycle.steps.do { |step|
 			step.send(sendname, gains.at(time).at(\str).asFloat);
@@ -1046,8 +1042,9 @@ JSTidyFP : JSTidyNode {
 			JSTidy.hush(bus.index);
 		} {
 			Routine({
-				// fade out the audio on the nodeproxy bus
-				// add 11 to so that this will also work for fx proxies
+				// fade out the audio on the nodeproxy bus, using \filter method with a Line
+				// add 11 to the max slot number so that this will also work for fx proxies
+				// who have the fx on slote number max + 10.
 				var slot = Server.default.options.numAudioBusChannels + 11;
 				this.put(
 					slot,

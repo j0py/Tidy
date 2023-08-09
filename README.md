@@ -80,7 +80,7 @@ This file the JSTidy class (and supporting classes), and some extensions (extra 
 
 #### NodeProxy
 
-I added a few operators on NodeProxy and ProxySpace make it easier to create a "mix" with "effects".
+I added a few operators on NodeProxy and ProxySpace make it easier to create a "mix" with "effects", and to enable chaining function/pattern pairs inside the SuperCollider Interpreter, almost as in TidalCycles.
 
 ##### fx(function_or_symbol, extra_args)
 
@@ -88,117 +88,170 @@ The fx function installs a synth at the end of the slots of the NodeProxy. If yo
 
 ##### to(str, gain=1.0)
 
-This method will send signal from this NodeProxy to a NodeProxy with the given name in the "str" parameter.
+This method will send signal from this NodeProxy to the (other) NodeProxy with the given name in the "str" parameter.
 
 ##### > (str)
 
-HIER
-
-The following operators to NodeProxy do not have to do with creating the mix, but with working like Tidal Cycles while in SuperCollider's Interpreter.
+Sends the signal from this NodeProxy to other NodeProxies that have been speciefied in (str). The (str) is split into an array of substrings, separated by spaces. The substrings are paired (clumped), and each pair denotes the name of a NodeProxy to send to and a floating point number, which is the gain.
 
 ##### < (str)
 
+Initializes the NodeProxy to audio rate and then adds the function + pattern in (str) to a new JSTidy object that is created around the NodeProxy.
+
 ##### << (str)
+
+Initializes the NodeProxy to control rate and then adds the function + pattern in (str) to a new JSTidy object that is created around the NodeProxy.
 
 ##### hush(fadeTime)
 
+Fades out the signal of this NodeProxy and stops the Routine that is triggering sounds on it.
 
+#### Order of execution
 
+The correct Order of Execution is done by using the slot numbers of the NodeProxies. This let's you add new FX's and/or new sound layers while everything is playing, and you do not have to worry about which you do first. I haven't tried to find how NodeProxies do this internally, but as far as i can see (ahum, hear) it works.
 
+The only problem is, what slotnumbers to use when sending signal from ANY proxy to ANY other proxy in ANY order. The slotnumber must be a unique number. After some time i thought of this trick: the index of the private bus of a proxy is unique among all proxies and can thus be used as the slot number for that proxy on any other proxy.
 
-When making a mix with effects, somehow you have to address the problem of "order of execution". If an FX synth reads audio input from a bus, and a SOURCE synth writes audio to that bus, then it will only work if the SOURCE synth writes audio BEFORE the FX synth reads it. This can be accomplished by putting the SOURCE synth ABOVE the FX synth in the Node-graph of the SC Server.  
-The SCSynth does the following for every block of audio: it clears the bus, it lets synths use the bus, activating them one after the other from the TOP of the nodetree to the BOTTOM.
-
-NodeProxies solve this using "slots" in which you can put "objects" like a function, synth or filter. Check the documentation on "supported sources" for NodeProxy class.  
-When a NodeProxy generates its audio output, it activates all processes that are attached to its slots, in slot order. So slot 0 gets a chance to use the NodeProxy's private bus first, and then slot 1, and then slot 2, etc.  
-Finally the output of the NodeProxy is "ready": other NodeProxies can read it, or a Monitor on the NodeProxy bus can play the audio to hardware buses (or any other buses).
-
-Imagine a NodeProxy acting as a SOURCE, and another NodeProxy, acting as an FX. The SOURCE NodeProxy has some synth playing on its private bus.
-
-On the FX NodeProxy, we could do:
 ```
-~fx[n] = \filterIn -> { |in| ~source * 0.3 }
-```
-This will read the finished audio from the ~source proxy, and write it on the bus of the ~fx proxy with a "gain" of 0.3. It mixes with other audio that may exist already on the ~fx proxies bus. The only question is: what slot (n) to use?
-
-We must be able to add any proxy signal to ~fx, and for each proxy, we must use a unique number as slot number. Especially if we want to change the gain of remove it entirely, we must still remember the slot number somehow.  
-It took me a while, but here's my trick: the index of the private bus of the ~source proxy is a unique number that can be used as a slot number. Every NodeProxy has it's own audio bus, and so they will all have a different bus index number.
-
-We can ask the server how much audio buses it maximally has, and so we know that the actual effect function or synth can be placed on a slot somewhere above that number of audio buses. If the server has 1024 audio buses max, and we place the fx synth 10 slots (to be safe) above that, then we get this:
-```
-~fx[~source.bus.index + 10] = \filterIn -> { |in| ~source * 0.3 }
-~fx[1024 + 10] = \filterIn -> { |in| LPF.ar(in, 200) }
+~fx[~source.bus.index + 10] = \filterIn -> { |in| ~source * gain }
+~fx[max_audiobuses + 10] = \filterIn -> { |in| LPF.ar(in, 200) }
 ```
 I add 10 to all the slotnumbers to steer clear from the hardware ins/outs, although that might not even be necessary.
 
 I don't know how they do it, but this way the Nodeproxies take care of the "order of execution" problem for me. I can change effects while everything is playing, i can change gains, remove them, it just works.
 
-I added the fx() function to NodeProxy, which will install a fx like above, but also it adds the name of the proxy to a list of effect proxies that is kept in the JSTidy class (classvar). If you lateron write something like "room 0.1", then JSTidy can recognize "room" as the name of the ~room proxy, and then knows what to do: set the gain to 0.1.
-
-Another extension on NodeProxy is the ">" function, which will send the signal of the proxy to another proxy with a given gain.
 ```
 s.boot;
 p = ProxySpace.push(s);
 ~out.play;
-~raw.fx { |in| in } > "out 0.8";
+~raw.fx { |in| in } > "~out 0.8";
 ```
 This "mixer" has proxy ~out playing to hardware bus, and proxy ~raw playing to ~out with a gain of 0.8. If you send audio to ~raw, it will be played to ~out, and then your speakers. You can extend this like ever you want!  
-The fx() function supports supplying a Function, like above, but you can also give it a symbol, which will be taken for a SynthDef.
+The fx() function supports supplying a Function, like above, but you can also give it a symbol (+ extra params array), which will be taken for a SynthDef name.
 ```
-~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 1]) > "raw 0.8"
+~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 1]) > "~raw 0.8"
 ```
-Here, i created some ```\comb``` SynthDef and the extra arguments will be passed on to the synth instance of it. It will play to the ~raw bus.
-
-It is developing a bit, but the way i make the "mix" will stabilize to something that is handy, and then it could be moved into some "setup.scd" to always just "be there". The ~raw could be used for the Kick and Bass sounds, and i could create a ~hpf NodeProxy with a high pass filter writing to ~raw. All instruments other than Kick or Bass must then write to ~hpf. This will prevent bass rumbling and interference in the resulting audio, maybe.
 
 #### ProxySpace
 
 On ProxySpace i added method config(bpm, bpb), which installs a TempoClock with a tempo according to "bpm" (beats per minute), and also sets quantisation according to "bpb" (beats per bar). I am not satisfied with this method, and if the call goes into some setup.scd file, it is no longer needed.
 
-Method ```hush(<fadetime>)``` is also added to ProxySpace. A short way to end the performance.
-
-I find it hard to start playing sounds again after using ```hush```. Usually i recompile the class library to totally reset supercollider and then i can start again. I still have to think about/work on that.
+Method ```hush(<fadetime>)``` is also added to ProxySpace. A short way to hush all NodeProxies.
+After hush you should pop the ProxySpace to return to the original SuperCollider environment.
+But after that, you can push a new ProxySpace and start over.
 
 ### Interpreter: trigger sounds
 
 #### Interpreter limitations
 
-The Interpreter is something i have to deal with. I messed with setting a prepocessor on the Interpreter, in which you can do things with the code-to-be-interpreted, but the result is remarkably unstable, crashing SCLang if anything goes wrong. Not recommended.
-
-```d1 $ s "bd sn" ``` Will never work in the Interpreter.
+```d1 $ s "bd sn" ``` Will never work -as is- in the Interpreter.
 
 I want to use NodeProxies anyway, so there will be differences.  
 What i have so far is this:
 ```
-~a < "s bd sn" - "raw 0.3"
+~a < "s bd sn" - "~raw 0.3"
 ```
-You must send the sound somewhere, or you will not hear it. Hence "raw 0.3".
+You must send the sound somewhere, or you will not hear it. Hence "~raw 0.3".
 
-The ```#``` sign is not possible in SC Interpreter, i replaced it with ```-```, which also looks quite tidy :).
+The ```#``` sign is not possible in the Interpreter, i replaced it with ```-```, which also looks quite tidy :).
 
-The "<" function has been added to NodeProxy to get things going. The Interpreter first encounters ```~a```, which results in a NodeProxy (we are in ProxySpace). The "<" method on the proxy is called, with a String argument.  
+#### Combining function/pattern pairs in the Interpreter
+
+The "<" function has been added to NodeProxy to get things going. The Interpreter first encounters ```~a```, which results in a (new or existing) NodeProxy (we are in ProxySpace). The "<" method on the proxy is called, with a String argument.  
 The String argument has this format: ```<function name> <pattern>```.  
 
-The "<" method creates a JSTidy object around the proxy, and this JSTidy object will handle the function and the pattern. Yep, it starts building a tree again.  
-The result so far is that JSTidy object, and the Interpreter continues to the ```-``` operator. Of course, the JSTidy object has this method, and it will accept, again, a String as argument. JSTidy processes the String (containing again a function name and a pattern), returns itself, and then this can be repeated as required, calling many functions with many patterns. Each function stores something inside the tree that is built up inside the JSTidy object.
+The "<" method creates a JSTidy object around the proxy, and this JSTidy object will process the function and the pattern and start building a tree of objects inside itself.
+The result so far is the JSTidy object, and the Interpreter continues to the ```-``` operator. I defined that operator on the JSTidy object, and it will accept, again, a function/pattern String as argument. JSTidy processes the String, returns itself, and then this can be repeated as required, calling many functions with many patterns. Each function stores something inside the tree that is built up inside the JSTidy object.
 
-Finally, the code to interpret is all done, and then the Interpreter will call ```printOn``` on the resulting JSTidy object, so that something is written to the post window. And in the implementation of the ```printOn``` method, i have the opportunity to start (or replace a running-) a Routine that will play the cycles.
+Finally, the code to interpret is all done, and then the Interpreter will call ```printOn``` on the resulting JSTidy object, so that something is written to the post window. And in the implementation of the ```printOn``` method, i have the opportunity to start (or replace) a Routine that will play the cycles.
 
-Sneaky and hacky, but reliable.
+#### Stack and Seq functions need to parse an array
+
+```
+(
+~a < "seq 0 1 2 1" -- [
+   \ -- "note 1 2 3" - "sound bd",
+   \ -- "note 4 5 6" - "sound sn",
+] - "~raw 0.5"
+)
+```
+
+The Seq function takes a pattern of indices, and plays the fragments that the indices point to.
+
+After interpreting ```~a < "seq 0 1 2 1"``` the Interpreter invokes the "--" operator on the JSTidy object, with an array as parameter. The "--" operator will make the elements of the array children of the preceding function/pattern in its inernal tree. But first, the Interpreter will interpret the array elements one by one.
+
+Fot this, the Symbol class has also received a new "--" operator: it will create a new JSTidyTree object, which will process the first function/pattern string and then return itself. The Interpreter will then invoke the "-" operator on that as before. Finally, the array will have become an array of JSTidyTree objects, each with its own tree built inside of it.
+
+The "--" operator on JSTidy who got this array as parameter will return itself again (a JSTidy), and so after the array, you can supply more function/pattern pairs. Even another Seq should be no problem!
+
+So yes, Seq has been implemented at this time and it works.
+
+Stack is another story. I am able to let the Interpreter parse it into the internal tree structure, but then playing it is another thing. I am able to combine all the steps of the Stack layers together into one layer that then can be played.
+
+What if you wan to send steps of the first layer through a reverb effect, but not the steps of the second layer?
+
+#### Sends
+
+There is a difference between sending signal from one proxy to another in the mixer, and in one of the playing proxies.
+
+In the mixer you can simply use the ```\filterIn -> { function }``` method as in function NodeProxy.fx().
+
+But in a playing proxy you have a problem then if you want to use a Stack. Also when not using a Stack you have a problem: the send to an effect is patternable, so maybe in steps "note 1 2 3 4" you send to reverb with "reverb 0 1". This means that only steps "3" and "4" should be sent to the reverb, and not steps "1" and "2". This cannot be solved in the mixer.
+
+The solution i came up with involves adding more Out's _to all your synthdefs_.
+
+```
+SynthDef(\bla, {
+    etc;
+    Out.ar(\out.kr(0), sig);
+    Out.ar(\send1.kr(0), sig * \gain1.kr(0));
+    Out.ar(\send2.kr(0), sig * \gain2.kr(0));
+    Out.ar(\send3.kr(0), sig * \gain3.kr(0));
+    // as many as you want
+}).add
+```
+
+If a proxy (say ~a) encounters a send (recognizeable by a function name starting with a "~") like "~reverb 0 1", then:
+- the ~reverb proxy is created if it does not yet exist
+- another proxy is created, specifically for sending signal from ~a to ~reverb
+- the name of that proxy will be "~areverb"
+- the end signal of that proxy is sent to the ~reverb proxy as is done in the mixer (~areverb has a bus, and so it has it's own slot number)
+- when a step is played for proxy ~a, all the sends to other proxies are given to it's synthdef using \sendx, \gainx pairs
+
+And that works.
+If you do not add the Out's to your SynthDef, effects will not be sent, the \sendx/\gainx pairs are simply ignored.
+If you remove the send and the re-evaluate, the extra proxy will remain in place. Proxy ~a will write nothing to its bus, because you removed the send. It will be silent.  
+So it costs extra buses on the server, but we've got 1024 (or more if you want) of those..
 
 #### Functions supported by the JSTidy class
 
-#### Inner working: building a tree that produces cycles
+Today (2023-08-09) i have these functions implemented:
 
-TODO: explain, usage, Tidal Cycles functions supported
+- sends (described earlier)
+- jux ```~a < "jux 0.6" |> "rev" | etc ```
+- off ```~a < "off 0.25" |+ "n 7" | etc ```
+- rev ```~a < "n 1 2 3 4" |> rev |> "s sn" etc ```
+- seq (described earlier)
+- a chord function with optional strumming "chord 123 024:3"
+- slice ```~a < "slice 8 1 2 3 4" | etc```
+- every ```~a < "every 4" |> "rev" | "n 1 2 3 4" - etc```
 
-## Roadmap
+There is a DX7 in the code, and you can set a preset to use, but is costs too much cpu so maybe i will remove it again.
 
-Current version v1.0.0, 2023-04-25
+If the name of a function starts with a "~", then it is treated as a send.
+If the name of a function exists as a function object (prefixed with "JSTydyFP_") then that function is used.
+In all other cases, the function name is just added as a key in the dict for each step, with a value.
+
+So if you come up with a new SynthDef which has exotic parameter "xyz", then you can supply values for that parameter straightaway.
+
+### Roadmap
 
 I don't think i will have time to implement ALL functionality of Tidal Cycles. I just want to implement enough to enjoy making music with it. But maybe if more people join in to add functions.. who knows. Have to figure out this github thing..
 
+I will make some Youtube videos to show you how you can use Tidy.
 
+The Stack function i will work on until it is implemented. At least the sends to other proxies has now been sorted out.
 
+Many wild ideas come to my mind. A "rec x" function, that will allocate a buffer, and record the microphone input in that buffer during the next cycle (it known the length of a cycle, so it known how big the buffer should be). Only after re-evaluation will it record once more in the same buffer. Of course you also need a "play x" functions well to play some buffer (which will last the whole cycle). Maybe even "rec x ~a" if you want to record proxy "~a" while live coding.
 
-
+Sleep well :-)
