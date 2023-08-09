@@ -67,47 +67,6 @@ JSTidy : JSTidyTree {
 		routines.do { |r| r.stop };
 	}
 	
-	// Send signal from your proxy's private bus to other NodeProxies
-	// using the \mix -> { } method. The slot number to use is
-	// the bus index of your proxy + 10. This way, each NodeProxy
-	// will use its own unique slot number.
-	//
-	/*
-	*send { |from, str|
-		var slot, curr;
-		from.ar(2); // make sure a bus is allocated
-		slot = from.bus.index + 10; // we need the index
-
-		curr = Dictionary.new;
-		currentEnvironment.keysValuesDo { |key, proxy|
-			if(proxy.objects.at(slot).notNil) { curr.put(key, proxy) };
-		};
-		
-		// str format: "<proxy> <gain> <proxy> <gain> ..."
-		str.split($ ).clump(2).do { |pair|
-			var key = pair[0].asSymbol;
-			var to = currentEnvironment.at(key);
-
-			if(to.notNil) {
-				var gain = pair[1].asFloat;
-
-				curr.put(key, nil); // this proxy is (re)specified here
-				
-				// do not replace: it will disrupt the sound
-				if(to.objects.at(slot).isNil, {
-					to.put(slot, \mix -> { from.ar });
-				});
-
-				//"xset % % %".format(pair[0], "mix"++(slot), gain).postln;
-				to.xset(("mix"++(slot)).asSymbol, gain);
-			}
-		};
-
-		// remove sends that are present, but not re-specified
-		curr.keysValuesDo { |key, proxy| proxy.put(slot, nil) };
-	}
-	*/
-	
 	printOn { |stream|
 		// make sure that the routines Order exists
 		routines ?? { routines = Order.new };
@@ -161,8 +120,6 @@ JSTidy : JSTidyTree {
 		JSTidyException("% not understood".format(selector)).throw;
 	}
 
-	//> { |str| JSTidy.send(proxy, str) }
-
 	-- { |array|
 		array.do { |tidytree| cur.add(tidytree.tree) };
 		cur = cur.parent;
@@ -172,8 +129,8 @@ JSTidy : JSTidyTree {
 JSTidyTree {
 	var <tree, cur;
 	
-	// returns a JSTidy function. str format: "<function name> <pattern>"
-	// a JSTidy function takes a cycle, maybe alters it, and returns it.
+	// returns a JSTidyXX function. str format: "<function name> <pattern>"
+	// a JSTidyXX function takes a cycle, maybe alters it, and returns it.
 	func { |str|
 		var func, pat, class;
 
@@ -346,8 +303,6 @@ JSTidyStep {
 
 			this.put(\snd, nil);
 			this.put(\buf, nil);
-			// this.put(\chord, nil);
-			// this.put(\strum, nil);
 		};
 
 		this.at(\def) !? { |def|
@@ -409,15 +364,6 @@ JSTidyStep {
 		//
 		dict.put(\out, proxy.bus.index);
 
-		// this is correct behavior when NOT operating inside a Stack:
-		// the signal of the entire proxy (also from other steps) will
-		// be sent to the fx. Inside a stack we would not want that.
-
-		// in a Seq, one can installs a send, while the next line
-		// does not need it, so who will remove the send then?
-		// in a Seq, each step should use \send1 \gain1.
-		// make your SynthDefs all like that.
-
 		sends.keys.do { |fx, i|
 			var gain = sends.at(fx);
 			fx = currentEnvironment.at(fx.asSymbol);
@@ -427,19 +373,6 @@ JSTidyStep {
 
 		if(JSTidy.should_log(\step), { this.postln });
 
-		/*
-		sends.keysValuesDo { |fx, gain|
-			var slot = proxy.bus.index + 10;
-			fx = currentEnvironment.at(fx.asSymbol);
-
-			if(fx.objects.at(slot).isNil, {
-				fx.put(slot, \mix -> { proxy.ar });
-			});
-
-			fx.set(("mix"++(slot)).asSymbol, (gain ? 0).asFloat);
-		};
-		*/
-		
 		//                         degree, root, octave
 		//Scale.major.degreeToFreq(2, 60.midicps, 1);
 		rootfreq = dict.at(\freq);
@@ -703,13 +636,8 @@ JSTidySend : JSTidyNode {
 		var time, gains = children.first.get(cycle, name);
 		var sendname = (name ++ val).asSymbol;
 
+		// create a separate proxy to send signal to the fx for this proxy
 		currentEnvironment.at(sendname).to(val);
-		/*
-		"% numSynths %".format(
-			currentEnvironment.class,
-			Server.default.numSynths
-		).postln;
-		*/
 		
 		time = 0;
 		cycle.steps.do { |step|
@@ -987,9 +915,7 @@ JSTidyFP : JSTidyNode {
 					}
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "note" } {
-						var ch = str[0];
-						if((str.size == 2).and("abcdefg".contains(ch)), {
-							str = ch.asString ++ str[1].asInteger.asString;
+						if("abcdefg".contains(str[0]), {
 							step.put(\midinote, str.notemidi);
 						}, {
 							step.put(\note, str.asFloat);
@@ -1024,16 +950,20 @@ JSTidyFP : JSTidyNode {
 
 
 /*
-	inline effects: how to do it: reserve some slots maybe?
-*/
-
-/*
 	When evaluated in the interpreter, the "<" operator for
-	NodeProxy creates a new JSTidy object around the NodeProxy.
+	NodeProxy creates a new JSTidyTree object around the NodeProxy.
 	As the interpreter works from left to right, the next
-	operator will then be handled by that JSTidy object.
-	This goes on and on as more operators are encountered, and
-	this way, a tree of objects is built inside the JSTidy object.
+	operator will then be handled by that JSTidyTree object.
+    The parameter for that operator is a string.
+    JSTidyTree executes the operator with the string parameter,
+    adds something to the tree that is built inside itself,
+    and returns itself.
+
+    Then, if there is another operator + string argument, the
+    process repeats.
+
+	This goes on and on as more operators + strings are encountered, and
+	this way, a tree of objects is built inside the JSTidyTree object.
 
 	The last "operator" is the "printOn" message, that is called
 	by the interpreter when all the code has been interpreted.
@@ -1042,10 +972,9 @@ JSTidyFP : JSTidyNode {
 	During the printOn method, a new Routine is started, that will
 	generate and run JSTidyCycle's (bars) of JSTidyStep's, that will
 	launch synths on the server. The synths will receive the bus index
-    of the proxy as \out parameter.
+    of the proxy as \out parameter (and also indexes of fx buses).
 
-	So, you can use JSTidy if you use the "<" operator on a NodeProxy.
-	You can still use NodeProxy the normal way.
+	JSTidy extends JSTidyTree.
 */
 
 /////////////////////////////////////////////////////
@@ -1054,9 +983,6 @@ JSTidyFP : JSTidyNode {
 
 + NodeProxy {
 
-	// the < operator + a function string results in a JSTidy object.
-	// then, the interpreter will move on to the next operator
-	// invoking it on the JSTidy object that was just created.
 	< { |input|
 		
 		this.ar(2); // make sure to allocate the audio bus
@@ -1065,10 +991,10 @@ JSTidyFP : JSTidyNode {
 			^JSTidy(this).add_branch("<<").add_func(input)
 		});
 
-		input.postln;
+		input.postln; // error
 	}
 
-	// a control proxy
+	// << will result in a control proxy
 	<< { |input|
 		
 		this.kr(1); // make sure to allocate the control bus
@@ -1084,7 +1010,7 @@ JSTidyFP : JSTidyNode {
 		// avoid conflict with send slotnumbers, which are bus index + 10
 		var slot = Server.default.options.numAudioBusChannels + 10;
 		this.ar(2);
-
+		
 		if(func_or_symbol.isFunction, {
 			this.put(slot, \filterIn -> func_or_symbol);
 		}, {
@@ -1099,12 +1025,14 @@ JSTidyFP : JSTidyNode {
 
 		slot = this.bus.index + 10;
 
-		to = currentEnvironment.at(str.asSymbol);
+		if(str[0] == $~) { str = str.drop(1) }; // the ~ is optional
+		to = currentEnvironment.at(str.asSymbol); // might create proxy
 		if(to.objects.at(slot).isNil, {
 			to.put(slot, \mix -> { this.ar });
 		});
 
-		to.set(("mix"++(slot)).asSymbol, gain.asFloat);
+		to.fadeTime_(2);
+		to.xset(("mix"++(slot)).asSymbol, gain.asFloat);
 	}
 	
 	> { |str|
@@ -1134,11 +1062,12 @@ JSTidyFP : JSTidyNode {
 			}).play
 		}
 	}
-
-	
 }
 
 + Symbol {
+	// needed for Seq and Stack: inside an array, the Interpreter must
+	// first encounter a Symbol ad operator "--" and a String parameter.
+	// That will result in a new JSTidyTree object.
 	-- { |str| ^JSTidyTree.new.add_branch("--").add_func(str) }
 }
 
