@@ -4,7 +4,7 @@ categories:: Part of the Tidy quark
 related:: Classes/JSMini, Classes/JSSamples
 
 DESCRIPTION::
-Combining ProxySpace, JSMini (mininotation parser) and JSSamples with SuperCollider's Interpreter makes it possible to use almost equal syntax for specifying layers of sound and rhythm as in TidalCycles.
+Combining ProxySpace, JSMini (mini-notation parser) and JSSamples with SuperCollider's Interpreter makes it possible to use almost equal syntax for specifying layers of sound and rhythm as in TidalCycles.
 
 code::
 ~a < "buf 1 <2 4>/3*2" - "snd kit1" - "raw 0.2" - "room 0.1"
