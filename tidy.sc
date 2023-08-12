@@ -66,7 +66,7 @@ JSTidy : JSTidyTree {
 		routines ?? { routines = Order.new };
 		routines.do { |r| r.stop };
 	}
-	
+
 	printOn { |stream|
 		// make sure that the routines Order exists
 		routines ?? { routines = Order.new };
@@ -75,7 +75,7 @@ JSTidy : JSTidyTree {
 		// creation of the new tree. return right here, so that the old
 		// tree keeps running.
 		tree ?? { "tree nil".postln; ^this };
-		
+
 		if(JSTidy.should_log(\tree)) { tree.log };
 
 		// with count, you can log some cycles instead of playing them
@@ -93,7 +93,7 @@ JSTidy : JSTidyTree {
 			name = currentEnvironment.findKeyForValue(proxy);
 			slot = proxy.bus.index; // we need the index
 			proxy.printOn(stream);  // output to postwindow
-			
+
 			Routine({
 				// always create a fresh new routine on re-evaluation
 				routines.at(slot) !? { |r| r.stop };
@@ -128,7 +128,7 @@ JSTidy : JSTidyTree {
 
 JSTidyTree {
 	var <tree, cur;
-	
+
 	// returns a JSTidyXX function. str format: "<function name> <pattern>"
 	// a JSTidyXX function takes a cycle, maybe alters it, and returns it.
 	func { |str|
@@ -141,7 +141,7 @@ JSTidyTree {
 		if(func[0] == $~) {
 			^JSTidySend(func.drop(1).toLower, pat)
 		};
-		
+
 		class = "%%".format(func[0].toUpper, func.drop(1).toLower);
 		class = "JSTidyFP_%".format(class).asSymbol.asClass;
 		class !? { ^class.new(pat) };
@@ -229,7 +229,7 @@ JSTidyCycle {
 			}
 		}
 	}
-	
+
 	make_index {
 		var indexes=[], times=[];
 		steps !? {
@@ -267,13 +267,13 @@ JSTidyStep {
 		.put(\str, str)
 		.put(\num, num);
 	}
-	
+
 	putAll { |argdict| dict.putAll(argdict) }
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
 	send { |to, gain| sends.put(to.asSymbol, gain.asFloat) }
-	
+
 	play { |proxy|
 		var instr, def, sustain, dx7, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
@@ -369,13 +369,13 @@ JSTidyStep {
 		//                         degree, root, octave
 		//Scale.major.degreeToFreq(2, 60.midicps, 1);
 		rootfreq = dict.at(\freq);
-		
+
 		Routine({
 			var synths, strum;
 
 			strum = dict.at(\strum) ? 0;
 			synths = List.new;
-			
+
 			(dict.at(\chord) ? "0").do { |ch, i|
 				ch = ch.asInteger - $0.asInteger;
 				dict.put(\freq, scale.degreeToFreq(ch, rootfreq, 0));
@@ -395,7 +395,7 @@ JSTidyStep {
 
 			if(def.hasGate, {
 				sustain.wait;
-				
+
 				synths.do { |synth, i|
 					Server.default.bind { synth.set(\gate, 0) };
 					(strum * i * 0.05).wait;
@@ -441,7 +441,7 @@ JSTidyNode {
 	become_cur_after_add { ^false }
 
 	is_branch { ^false }
-	
+
 	steps_from_priority_queue { |pq|
 		// calculate delta times for all the steps
 		var steps = List.new;
@@ -561,17 +561,17 @@ JSTidyCombBoth : JSTidyComb {
 			)
 		);
 	}
-	
+
 	make_steps { |steps1, steps2|
 		var step1, step2, steps=List.new;
 
 		steps1 = steps1.asList;
 		steps2 = steps2.asList;
-		
+
         while { (steps1.size > 0) or: (steps2.size > 0) } {
 
 			step1 = step2 = nil;
-			
+
 			if(steps1.size > 0) { step1 = steps1.removeAt(0) };
 			if(steps2.size > 0) { step2 = steps2.removeAt(0) };
 
@@ -621,6 +621,8 @@ JSTidyPattern : JSTidyNode {
 }
 
 JSTidySend : JSTidyNode {
+	var create_sendname_proxy = true;
+
 	*new { |fx, pattern|
 		^super.new(fx).add(JSTidyPattern(pattern))
 	}
@@ -629,13 +631,15 @@ JSTidySend : JSTidyNode {
 		var time, gains = children.first.get(cycle, name);
 		var sendname = (name ++ "_" ++ val).asSymbol;
 
-		// create a separate proxy to send signal to the fx for this proxy
-		// do not call xset too often: will leave a trail of synths
-		currentEnvironment.at(sendname).to(val, 1.0, \set);
+		if(create_sendname_proxy) {
+			// create a separate proxy to send signal to the fx for this proxy
+			currentEnvironment.at(sendname).to(val, 1.0, \set);
+			create_sendname_proxy = false;
+		};
 
-		// store the sends in the step objects by calling send() method.
-		// during step.play, the sends are added to the dict of the step.
-		// and that way the values will be fed to the synth on the server.
+		// store the sends in the step objects by calling send() method
+		// during step.play, all the sends will be added to the dict of the
+		// step and then the values will be fed to the synth on the server.
 		time = 0;
 		cycle.steps.do { |step|
 			step.send(sendname, gains.at(time).at(\str).asFloat);
@@ -647,9 +651,9 @@ JSTidySend : JSTidyNode {
 
 JSTidyFP_Seq : JSTidyNode {
 	var seq; // a queue of steps
-	
+
 	*new { |pattern| ^super.new("seq").add(JSTidyPattern(pattern)) }
-	
+
 	get { |cycle, name|
 		var index;
 
@@ -940,7 +944,7 @@ JSTidyFP : JSTidyNode {
 			step.put(\str, nil);
 			step.put(\num, nil);
 		};
-		
+
 		^cycle;
 	}
 }
@@ -981,9 +985,9 @@ JSTidyFP : JSTidyNode {
 + NodeProxy {
 
 	< { |input|
-		
+
 		this.ar(2); // make sure to allocate the audio bus
-		
+
 		if(input.class == String, {
 			^JSTidy(this).add_branch("<<").add_func(input)
 		});
@@ -993,9 +997,9 @@ JSTidyFP : JSTidyNode {
 
 	// << will result in a control proxy
 	<< { |input|
-		
+
 		this.kr(1); // make sure to allocate the control bus
-		
+
 		if(input.class == String, {
 			^JSTidy(this).add_branch("<<").add_func(input)
 		});
@@ -1007,7 +1011,7 @@ JSTidyFP : JSTidyNode {
 		// avoid conflict with send slotnumbers, which are bus index + 10
 		var slot = Server.default.options.numAudioBusChannels + 10;
 		this.ar(2);
-		
+
 		if(func_or_symbol.isFunction, {
 			this.put(slot, \filterIn -> func_or_symbol);
 		}, {
@@ -1028,8 +1032,6 @@ JSTidyFP : JSTidyNode {
 			to.put(slot, \mix -> { this.ar });
 		});
 
-		// avoid calling xset lots of times, because this will result
-		// in lots of synths hanging around waiting to be destroyed
 		if((how ? \xset) == \xset) {
 			to.fadeTime_(2);
 			to.xset(("mix"++(slot)).asSymbol, gain.asFloat);
@@ -1037,7 +1039,7 @@ JSTidyFP : JSTidyNode {
 			to.set(("mix"++(slot)).asSymbol, gain.asFloat);
 		};
 	}
-	
+
 	> { |str|
 		str.split($ ).clump(2).do { |pair|
 			this.to(pair[0], pair[1].asFloat, \xset);
@@ -1049,10 +1051,9 @@ JSTidyFP : JSTidyNode {
 			JSTidy.hush(bus.index);
 		} {
 			Routine({
-				// fade out the audio on the nodeproxy bus, using \filter
-				// method with a Line. add 11 to the max slot number so
-				// that this will also work for fx proxies,
-				// who have the fx on slot number max + 10.
+				// fade out the audio on the nodeproxy bus, using \filter method with a Line
+				// add 11 to the max slot number so that this will also work for fx proxies
+				// who have the fx on slote number max + 10.
 				var slot = Server.default.options.numAudioBusChannels + 11;
 				this.put(
 					slot,
