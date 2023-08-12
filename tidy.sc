@@ -630,11 +630,12 @@ JSTidySend : JSTidyNode {
 		var sendname = (name ++ "_" ++ val).asSymbol;
 
 		// create a separate proxy to send signal to the fx for this proxy
-		currentEnvironment.at(sendname).to(val); // gain = 1
+		// do not call xset too often: will leave a trail of synths
+		currentEnvironment.at(sendname).to(val, 1.0, \set);
 
-		// store the sends in the step objects by calling send() method
-		// during step.play, all the sends will be added to the dict of the step
-		// and then the values will be fed to the synth on the server.
+		// store the sends in the step objects by calling send() method.
+		// during step.play, the sends are added to the dict of the step.
+		// and that way the values will be fed to the synth on the server.
 		time = 0;
 		cycle.steps.do { |step|
 			step.send(sendname, gains.at(time).at(\str).asFloat);
@@ -1014,7 +1015,7 @@ JSTidyFP : JSTidyNode {
 		});
 	}
 
-	to { |str, gain=1.0|
+	to { |str, gain, how|
 		var to, slot;
 
 		this.ar(2); // make sure we have a bus index
@@ -1027,13 +1028,19 @@ JSTidyFP : JSTidyNode {
 			to.put(slot, \mix -> { this.ar });
 		});
 
-		to.fadeTime_(2);
-		to.xset(("mix"++(slot)).asSymbol, gain.asFloat);
+		// avoid calling xset lots of times, because this will result
+		// in lots of synths hanging around waiting to be destroyed
+		if((how ? \xset) == \xset) {
+			to.fadeTime_(2);
+			to.xset(("mix"++(slot)).asSymbol, gain.asFloat);
+		} {
+			to.set(("mix"++(slot)).asSymbol, gain.asFloat);
+		};
 	}
 	
 	> { |str|
 		str.split($ ).clump(2).do { |pair|
-			this.to(pair[0], pair[1].asFloat);
+			this.to(pair[0], pair[1].asFloat, \xset);
 		}
 	}
 
@@ -1042,9 +1049,10 @@ JSTidyFP : JSTidyNode {
 			JSTidy.hush(bus.index);
 		} {
 			Routine({
-				// fade out the audio on the nodeproxy bus, using \filter method with a Line
-				// add 11 to the max slot number so that this will also work for fx proxies
-				// who have the fx on slote number max + 10.
+				// fade out the audio on the nodeproxy bus, using \filter
+				// method with a Line. add 11 to the max slot number so
+				// that this will also work for fx proxies,
+				// who have the fx on slot number max + 10.
 				var slot = Server.default.options.numAudioBusChannels + 11;
 				this.put(
 					slot,
