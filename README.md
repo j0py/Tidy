@@ -1,11 +1,11 @@
 # Tidy
 Tidal Cycles syntax for SuperCollider
 
-With Tidy you can combine function/pattern pairs on NodeProxies inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I am a great fan of the syntax and "tidyness" of Tidal Cycles and i want to use that together with NodeProxies in ProxySpace. Some proxies create a "mixer", and the cycles trigger sounds on other proxies that send signal to the mixer.
+Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I like the syntax and "tidyness" of Tidal Cycles a lot, but i want to use it in SuperCollider and be able to add/change things myself.
 
 First i wrote a mini-notation parser, JSMiniParser, and this resulted in the Pmini quark, where you can use mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, and so you need to install the Pmini quark if you wish to install the Tidy quark.
 
-In the usage example below, you see me using some JSSamples class. This is a small class that makes it easier to load and use audio samples. It is included in the Tidy quark, but i could also publish it as a separate quark. Not sure what is the best thing to do here.
+In the usage example below, you see me using some JSSamples class. This is a small class that makes it easier to load and use audio samples. It is included in the Tidy quark, but i could also publish it as a separate quark. Not sure what is the best thing to do here. All these quarks tend to get entangled with each other..
 
 ## Usage example
 
@@ -16,23 +16,21 @@ s.boot
 
 JSSamples.load("samples")
 
-p = ProxySpace.push(s).config(70, 4)
+JSTidy.tempo(70/60).quant(4)
 
 // set up a "mixer":
-~out.play
-~raw.fx { |in| in } > "~out 1"
-~delay = { 3 / 4 / ~tempo }
-~lfo = { SinOsc.ar(0.1) }
-~room.fx(\reverb) > "~raw 0.5"
-~comb.fx(\comb, [\delay, ~delay, \pan, ~lfo, \dec, 4]) > "~raw 0.8"
+\delay -- { 3 / 4 / \tempo.bus.asMap }
+\lfo   -- { SinOsc.ar(0.1) }
+\out   -- [0, 1, \copy]
+\room  -- [\out, 0.5, \reverb]
+\comb  -- [\out, 0.8, \comb, [\delay, \delay.bus.asMap, \pan, \lfo.bus.asMap, \dec, 4]
 
 // trigger sounds, and send them to the mixer:
-~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "~raw 0.1" - "~comb 0.01"
-~b < "buf 2" - "snd k2" - "~raw 0.2"
-~c < "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "~raw 0.02" - "~room 0.02" - "legato 2"
+\a -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "=out 0.1" - "=comb 0.01"
+\b -- "buf 2" - "snd k2" - "=out 0.2"
+\c -- "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "=raw 0.02" - "=room 0.02" - "legato 2"
 
-// end everything (8 seconds fadeout)
-p.hush(8)
+JSTidy.end(8)
 ```
 
 ## Quark content:

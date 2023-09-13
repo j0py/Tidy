@@ -1,52 +1,12 @@
-/*
-	- give JSTidyCycle a dictionary too; functions may set things
-      in it, which could influence playing steps, or the routine
+// TODO: tidy should declare playbuf_stereo/mono by itself
 
-    - "ser 2 3" | <sequence 1> | <sequence 2> | <default stuff>
-      this would play:
-      <sequence 1> | <default stuff> 2 times
-      <sequence 2> | <default stuff> 3 times
-      <sequence 1> | <default stuff> 2 times
-      etc
+JSTidy {
+	classvar loglevel;
 
-    - "one 2 3" | <sequence 1> | <sequence 2> | <default stuff>
-      this would play:
-      <sequence 1> | <default stuff> 2 times
-      <sequence 2> | <default stuff> 3 times
-	  and then the routine would stop
+	var <>name, <tree, cur;
 
-    - "one" | <some stuff> would play <some stuff> once
-
-    - "par" | <sequence 1> | <sequence 2> | <some stuff>
-      finds out the last branch by itself (<some stuff>)
-      plays the branches before it in parallell as sub-routines
-      of the main routine. or you could just combine the cycles
-      coming out of <sequence 1> | <some stuff> with the cycles that
-      come out of <sequence 2> | <some stuff> in 1 routine. i want it
-      to be possible that sequence 1 and 2 have different lengths though.
-
-    - check differende between slice and splice. i remember that splice
-      makes sure that the sample always fits exactly by adusting rate.
-
-	- "rot" function: rotate the cycle left or right for certain number
-	of steps, given by a pattern (0 = no rotation).
-
-	- "slice"/"splice" : note:slice_number. rate = (note - 60).midiratio
-
-	- "life" : bring in small random variations (wow:flutter)
-
-	- use Shaper.ar to create distortion effects
-*/
-
-JSTidy : JSTidyTree {
-	classvar loglevel, routines;
-
-	var <>proxy, <>count;
-
-	*new { |proxy| ^super.new.proxy_(proxy) }
-
-	*show { |count| ^super.new.count_(count) }
-
+	*new { |name| ^super.new.name_(name) }
+	
 	*should_log { |level|
 		loglevel ?? { loglevel = [] };
 		^(loglevel.indexOf(level).notNil);
@@ -57,20 +17,31 @@ JSTidy : JSTidyTree {
 		level ?? { loglevel = [] } !? { loglevel = loglevel.add(level) };
 	}
 
-	*hush { |index|
-		routines ?? { routines = Order.new };
-		routines.at(index) !? { |r| routines.put(index, nil); r.stop };
+	*end { |seconds=1|
+		// TODO: end all routines
+		// Library.at(\tidyar, name, \routine) !? { |r| r.stop };
+	}
+	
+	*hush { |name, seconds=1|
+		Routine({
+			var beats = seconds / thisThread.clock.tempo;
+			Library.put(\tidyar, name, \fade, beats);
+			beats.wait;
+			Library.at(\tidyar, name, \routine) !? { |routine|
+				Library.put(\tidyar, name, \routine, nil);
+				routine.stop
+			};
+		}).play;
 	}
 
-	*stop {
-		routines ?? { routines = Order.new };
-		routines.do { |r| r.stop };
+	*tempo { |tempo|
+		TempoClock.tempo_(tempo);
+		("\\tempo -- { DC.kr(" ++ tempo ++ ") }").interpret;
 	}
 
+	*quant { |quant| Library.put(\tidy, \quant, quant.asInteger) }
+	
 	printOn { |stream|
-		// make sure that the routines Order exists
-		routines ?? { routines = Order.new };
-
 		// if tree is nil then something has gone wrong during the
 		// creation of the new tree. return right here, so that the old
 		// tree keeps running.
@@ -78,39 +49,65 @@ JSTidy : JSTidyTree {
 
 		if(JSTidy.should_log(\tree)) { tree.log };
 
-		// with count, you can log some cycles instead of playing them
-		count !? {
-			if(JSTidy.should_log(\cycle)) {
-				(count - 1).do { tree.get(JSTidyCycle.new) };
-				tree.get(JSTidyCycle.new).postln.class.postln;
-			};
-		};
+		name.printOn(stream);  // output to postwindow
 
-		// if you have a proxy and got here, then we can play
-		proxy !? {
-			var slot, name;
-			proxy.ar(2); // make sure we have a bus
-			name = currentEnvironment.findKeyForValue(proxy);
-			slot = proxy.bus.index; // we need the index
-			proxy.printOn(stream);  // output to postwindow
+		// make sure that only 1 routine will replace the running
+		// routine at the next quantisation point. one could
+		// evaluate some code twice within one quantisation period!
+		Library.at(\tidyar, name, \evaluated) ?? { 
 
-			Routine({
-				// always create a fresh new routine on re-evaluation
-				routines.at(slot) !? { |r| r.stop };
-				routines.put(slot, Routine({
+			// a logical cycle lasts 1 beat in my system, quant is in beats
+			Library.put(\tidyar, name, \evaluated, Routine({
+				var quant, nudge=0.001, now=thisThread.beats, wait;
+
+				quant = (Library.at(\tidy, \quant) ? 4).asInteger;
+
+				// stop the old routine <nudge> before starting the new
+				// nudge=0 : old routine triggers one more note, while the
+				// new routine also triggers -> double notes!
+				wait = (now + quant).div(quant) * quant - now;
+				if(wait < nudge) { wait = wait + quant };
+				
+				(wait - nudge).wait;
+				Library.at(\tidyar, name, \routine) !? { |r| r.stop };
+
+				nudge.wait;
+				Library.put(\tidyar, name, \routine, Routine({
+					var fading=false, faded, fadebeats, gain=1;
+
+					// enable re-evaluation
+					Library.put(\tidyar, name, \evaluated, nil);
+					
 					loop({
 						var cycle = tree.get(JSTidyCycle.new, name);
+						
 						if(JSTidy.should_log(\cycle), { cycle.postln });
-						cycle.steps.do { |step|
+
+						Library.at(\tidyar, name, \fade) !? { |beats|
+							Library.put(\tidyar, name, \fade, nil);
+							fading = true;
+							faded = 0;
+							fadebeats = beats;
+						};
+
+						cycle.steps.do({ |step|
 							var slow;
-							if(step.trig > 0) { step.play(proxy) };
+							if(fading) {
+								gain = faded.linexp(0,fadebeats,1,0.001);
+							};
+							
+							if(step.trig > 0) { step.play(gain) };
 							slow = (step.at(\slow) ? "1").asFloat;
 							(step.delta * slow).wait;
-						};
+
+							if(fading) {
+								faded = faded + (step.delta * slow)
+							};
+						});
 					});
-				}).play(proxy.clock));
-			}).play(proxy.clock, proxy.quant); // quant: wait for beat
-		}
+				}).play);
+			}).play);
+		};
 	}
 
 	// if you make a mistake, you might get here.
@@ -124,11 +121,7 @@ JSTidy : JSTidyTree {
 		array.do { |tidytree| cur.add(tidytree.tree) };
 		cur = cur.parent;
 	}
-}
-
-JSTidyTree {
-	var <tree, cur;
-
+	
 	// returns a JSTidyXX function. str format: "<function name> <pattern>"
 	// a JSTidyXX function takes a cycle, maybe alters it, and returns it.
 	func { |str|
@@ -138,8 +131,11 @@ JSTidyTree {
 		func = str.removeAt(0);
 		pat = str.join($ ).stripWhiteSpace;
 
-		if(func[0] == $~) {
-			^JSTidySend(func.drop(1).toLower, pat)
+		if(func[0] == $=) {
+			func = func.drop(1);
+			if(Library.at(\tidyar, func.asSymbol, \bus).notNil) {
+				^JSTidyOut(func, pat)
+			}
 		};
 
 		class = "%%".format(func[0].toUpper, func.drop(1).toLower);
@@ -258,12 +254,12 @@ JSTidyCycle {
 }
 
 JSTidyStep {
-	var <>trig, <>delta, <>dur, <>dict, <>sends;
+	var <>trig, <>delta, <>dur, <>dict, <>outs;
 
 	*new { |trig, delta, dur, str, num|
 		^super.newCopyArgs(trig ? 0, delta ? 1, dur ? 1)
 		.dict_(Dictionary.new)
-		.sends_(Dictionary.new)
+		.outs_(Dictionary.new)
 		.put(\str, str)
 		.put(\num, num);
 	}
@@ -272,21 +268,15 @@ JSTidyStep {
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
-	send { |to, gain| sends.put(to.asSymbol, gain.asFloat) }
+	out { |to, gain|
+		//"step.out(%, %)".format(to, gain).postln;
+		outs.put(to.asSymbol, gain.asFloat)
+	}
 
-	play { |proxy|
+	play { |fader=1|
 		var instr, def, sustain, dx7, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
-
-		// control proxy intercept
-        if(proxy.rate == \control) {
-			dict.at(\val) !? { |val|
-				Server.default.setControlBusValue(proxy.bus.index, val);
-				//"set bus % val %".format(proxy.bus.index, val).postln;
-			};
-			^this;
-		};
-
+		
 		// it will be audio
 		this.at(\snd) !? { |bank|
 			var index = (this.at(\buf) ? 0).asInteger;
@@ -353,14 +343,13 @@ JSTidyStep {
 		sustain = dict.at(\legato) * dur
 		* (dict.at(\slow) ? 1)
 		/ (dict.at(\fast) ? 1);
-		dict.put(\secs, sustain / proxy.clock.tempo);   // in seconds
+		dict.put(\secs, sustain / thisThread.clock.tempo);   // in seconds
 
-		dict.put(\out, proxy.bus.index); // the main output
-
-		sends.keys.do { |sendname, i|
-			var gain = sends.at(sendname);
-			var bus = currentEnvironment.at(sendname.asSymbol).bus;
-			dict.put(("send"++((i+1).asString)).asSymbol, bus.index);
+		outs.keys.do { |name, i|
+			var gain = outs.at(name) * fader;
+			var bus_index = Library.at(\tidyar, name, \bus).index;
+			//"step.play out % %".format(bus_index, gain).postln;
+			dict.put(("out"++((i+1).asString)).asSymbol, bus_index);
 			dict.put(("gain"++((i+1).asString)).asSymbol, gain.asFloat);
 		};
 
@@ -411,7 +400,7 @@ JSTidyStep {
 			dur.round(0.01).asString.padLeft(6)
 		);
 		dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
-		//sends.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
+		//outs.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
 		stream << "\n";
 	}
 }
@@ -620,35 +609,24 @@ JSTidyPattern : JSTidyNode {
 	}
 }
 
-JSTidySend : JSTidyNode {
-	var create_sendname_proxy = true;
-
+JSTidyOut : JSTidyNode {
 	*new { |fx, pattern|
 		^super.new(fx).add(JSTidyPattern(pattern))
 	}
 
 	get { |cycle, name|
 		var time, gains = children.first.get(cycle, name);
-		var sendname = (name ++ "_" ++ val).asSymbol;
-
-		if(create_sendname_proxy) {
-			// create a separate proxy to send signal to the fx for this proxy
-			currentEnvironment.at(sendname).to(val, 1.0, \set);
-			create_sendname_proxy = false;
-		};
-
-		// store the sends in the step objects by calling send() method
-		// during step.play, all the sends will be added to the dict of the
-		// step and then the values will be fed to the synth on the server.
+		
 		time = 0;
 		cycle.steps.do { |step|
-			step.send(sendname, gains.at(time).at(\str).asFloat);
+			step.out(val, gains.at(time).at(\str).asFloat);
 			time = time + step.delta;
 		};
 		^cycle;
 	}
 }
 
+// play sub-sequences
 JSTidyFP_Seq : JSTidyNode {
 	var seq; // a queue of steps
 
@@ -675,6 +653,7 @@ JSTidyFP_Seq : JSTidyNode {
 }
 
 // "note 0 2 4" - "chord 123:1 135" // str = the chord, num = strum 0 - 9
+// TODO: put chord in mini-notation too: <0,2,4> strum?
 JSTidyFP_Chord : JSTidyNode {
 	*new { |pattern| ^super.new("chord").add(JSTidyPattern(pattern)) }
 
@@ -693,6 +672,7 @@ JSTidyFP_Chord : JSTidyNode {
 }
 
 // ~a < "jux 0.6" |> "rev" | ...
+// pan original left, altered right
 JSTidyFP_Jux : JSTidyNode {
 	var <>by;
 
@@ -732,6 +712,7 @@ JSTidyFP_Jux : JSTidyNode {
 }
 
 // ~a < "off 0.25" |+ "n 7" | ..
+// add timeshifted, altered layer
 JSTidyFP_Off : JSTidyNode {
 	var <>shift, <>stack;
 
@@ -788,6 +769,7 @@ JSTidyFP_Off : JSTidyNode {
 }
 
 // reverse the dictionary
+// TODO: i think you can also reverse the steps now
 JSTidyFP_Rev : JSTidyNode {
 	*new { |pattern| ^super.new("rev") }
 
@@ -799,7 +781,7 @@ JSTidyFP_Rev : JSTidyNode {
 	}
 }
 
-// ~a < "slice 8 1 2 3 4" | ...
+// ~a < "slice 8 1 2 3 4" | "splice 1" - ...
 JSTidyFP_Slice : JSTidyNode {
 	var <>count;
 
@@ -830,7 +812,10 @@ JSTidyFP_Slice : JSTidyNode {
 			slice = (step.at(\str) ? 0).asInteger; // what slice to play
 			step.put(\str, nil);
 			step.put(\num, nil); // could use this for bufnum..
-			step2 !? { step.putAll(step2.dict) }; // bufnum,degree,def etc
+			step2 !? {
+				step.putAll(step2.dict); // bufnum,degree,def etc
+				step.outs = step2.outs; // what bus(es) to play to
+			};
 
 			step.put(\begin, max(0, min(slice, count - 1)) / count);
 			step.put(\end, max(1, min(slice + 1, count)) / count);
@@ -843,6 +828,7 @@ JSTidyFP_Slice : JSTidyNode {
 	}
 }
 
+// do something extra every nth cycle
 JSTidyFP_Every : JSTidyNode {
 	var <>when, turn;
 
@@ -868,6 +854,15 @@ JSTidyFP_Every : JSTidyNode {
 }
 
 // ~a << "note 1 2 3 4" |> "dx7 12921"
+// needs DX7.init. plays a dx7 preset
+// TODO: should not be intertwined with Tidy!
+//
+// the DX7 class is based on:
+// --------------------------
+// Supercollider DX7 Clone v1.0
+// Implemented by Aziz Ege Gonul for more info go to www.egegonul.com
+// Under GNU GPL 3 as per SuperCollider license
+//
 JSTidyFP_Dx7 : JSTidyNode {
 	var <>preset;
 
@@ -881,6 +876,10 @@ JSTidyFP_Dx7 : JSTidyNode {
 	}
 }
 
+// catch-all function: the function name becomes the "thing" that you set
+// in the step dictionary. it will become a direct parameter to the
+// synthdef as the step gets played.
+//
 JSTidyFP : JSTidyNode {
 	*new { |val, pattern|
 		var abbr = [
@@ -901,22 +900,22 @@ JSTidyFP : JSTidyNode {
 		cycle = children.first.get(cycle, name);
 		cycle.steps.do { |step|
 			step.at(\str) !? { |str|
-				if((str.size > 1).and(str.at(0) == $~), {
-					// str is like ~xxx: do nodeproxy.bus.asMap
-					var proxy;
-					proxy = currentEnvironment.at(str.drop(1).asSymbol);
-					proxy.kr(1); // could be a new proxy, so initialize it
-					step.put(val.asSymbol, proxy.bus.asMap);
-				}, {
+				if(str[0] == $=) {
+					// "=xxx" means "map controlbus xxx for this param"
+					var bus;
+					bus = Library.at(\tidykr, str.drop(1).asSymbol, \bus);
+					bus !? { step.put(val.asSymbol, bus.asMap) }
+				} {
+					// interpret str depending on the function name (val)
 					case
 					{ val == "def" } { step.put(\def, str.asSymbol) }
 					{ val == "buf" } { step.put(\buf, str.asInteger) }
-					{ val == "vel" } {
-						step.put(\vel, str.asInteger.clip(0, 128))
-					}
+					{ val == "vel" } { step.put(\vel, str.asFloat) }
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "note" } {
 						if("abcdefg".contains(str[0]), {
+							// TODO: SuperCollider supports "a", "as", "ab". use that.
+							// @see helpbrowser "Literals"
 							step.put(\midinote, str.notemidi);
 						}, {
 							step.put(\note, str.asFloat);
@@ -929,7 +928,7 @@ JSTidyFP : JSTidyNode {
 					{ step.put(val.asSymbol, str.asFloat) };
 
 					if(str == "~") { step.trig = 0 };
-				});
+				};
 			};
 
 			step.at(\num) !? { |num|
@@ -949,166 +948,111 @@ JSTidyFP : JSTidyNode {
 	}
 }
 
-
-/*
-	When evaluated in the interpreter, the "<" operator for
-	NodeProxy creates a new JSTidyTree object around the NodeProxy.
-	As the interpreter works from left to right, the next
-	operator will then be handled by that JSTidyTree object.
-    The parameter for that operator is a string.
-    JSTidyTree executes the operator with the string parameter,
-    adds something to the tree that is built inside itself,
-    and returns itself.
-
-    Then, if there is another operator + string argument, the
-    process repeats.
-
-	This goes on and on as more operators + strings are encountered, and
-	this way, a tree of objects is built inside the JSTidyTree object.
-
-	The last "operator" is the "printOn" message, that is called
-	by the interpreter when all the code has been interpreted.
-	It should return a string, to be displayed in the post window.
-
-	During the printOn method, a new Routine is started, that will
-	generate and run JSTidyCycle's (bars) of JSTidyStep's, that will
-	launch synths on the server. The synths will receive the bus index
-    of the proxy as \out parameter (and also indexes of fx buses).
-
-	JSTidy extends JSTidyTree.
-*/
-
 /////////////////////////////////////////////////////
 // HOOKS
 /////////////////////////////////////////////////////
 
-+ NodeProxy {
-
-	< { |input|
-
-		this.ar(2); // make sure to allocate the audio bus
-
-		if(input.class == String, {
-			^JSTidy(this).add_branch("<<").add_func(input)
-		});
-
-		input.postln; // error
-	}
-
-	// << will result in a control proxy
-	<< { |input|
-
-		this.kr(1); // make sure to allocate the control bus
-
-		if(input.class == String, {
-			^JSTidy(this).add_branch("<<").add_func(input)
-		});
-
-		input.postln;
-	}
-
-	fx { |func_or_symbol, extra_args|
-		// avoid conflict with send slotnumbers, which are bus index + 10
-		var slot = Server.default.options.numAudioBusChannels + 10;
-		this.ar(2);
-
-		if(func_or_symbol.isFunction, {
-			this.put(slot, \filterIn -> func_or_symbol);
-		}, {
-			this.put(slot, func_or_symbol.asSymbol, 0, extra_args);
-		});
-	}
-
-	to { |str, gain, how|
-		var to, slot;
-
-		this.ar(2); // make sure we have a bus index
-
-		slot = this.bus.index + 10;
-
-		if(str[0] == $~) { str = str.drop(1) }; // the ~ is optional
-		to = currentEnvironment.at(str.asSymbol); // might create proxy
-		if(to.objects.at(slot).isNil, {
-			to.put(slot, \mix -> { this.ar });
-		});
-
-		if((how ? \xset) == \xset) {
-			to.fadeTime_(2);
-			to.xset(("mix"++(slot)).asSymbol, gain.asFloat);
-		} {
-			to.set(("mix"++(slot)).asSymbol, gain.asFloat);
-		};
-	}
-
-	> { |str|
-		str.split($ ).clump(2).do { |pair|
-			this.to(pair[0], pair[1].asFloat, \xset);
-		}
-	}
-
-	hush { |fade=0|
-		if(fade < 0.02) {
-			JSTidy.hush(bus.index);
-		} {
-			Routine({
-				// fade out the audio on the nodeproxy bus, using \filter method with a Line
-				// add 11 to the max slot number so that this will also work for fx proxies
-				// who have the fx on slote number max + 10.
-				var slot = Server.default.options.numAudioBusChannels + 11;
-				this.put(
-					slot,
-					\filter -> { |in| Line.ar(1,0,fade,in,0,2) }
-				);
-				// wait for the fadeout to be almost done
-				(fade - 0.01).wait;
-				// stop the routine from triggering new steps
-				JSTidy.hush(bus.index);
-				// remove the fadeout so that proxy is ready for use again
-				this.put(slot, nil);
-			}).play
-		}
-	}
-}
-
 + Symbol {
-	// needed for Seq and Stack: inside an array, the Interpreter must
-	// first encounter a Symbol ad operator "--" and a String parameter.
-	// That will result in a new JSTidyTree object.
-	-- { |str| ^JSTidyTree.new.add_branch("--").add_func(str) }
+	-- { |in|
+		var bus, node;
+
+		case
+		{ in.isFunction }
+		{
+			// control bus
+			Routine({
+				(bus = Library.at(\tidykr, this, \bus)) ?? {
+					bus = Bus.control(Server.default, 1);
+					Library.put(\tidykr, this, \bus, bus);
+				};
+
+				Library.at(\tidykr, this, \synth) !? { |node| node.free };
+
+				Server.default.sync;
+
+				node = in.play(nil, bus.index);
+				Library.put(\tidykr, this, \synth, node);
+			}).play;
+		}
+		{ in.isString }
+		{
+			// sequencer
+			^JSTidy(this).add_branch("--").add_func(in)
+		}
+		{ in.isArray }
+		{
+			// stereo fx bus
+			var out, gain, def, args;
+			# out, gain, def, args = in;
+
+			// make "=sin" syntax possible
+			args = args.collect { |el, i|
+				var result = el;
+
+				if(((i % 2) == 1).and(el.isString)) {
+					if(el[0] == $=) {
+						var key = el.drop(1).asSymbol;
+						Library.at(\tidykr, key, \bus) !? { |bus|
+							result = bus.asMap;
+						}
+					}
+				};
+				
+				result;
+			};
+			
+			Routine({
+				(bus = Library.at(\tidyar, this, \bus)) ?? {
+					bus = Bus.audio(Server.default, 2);
+					Library.put(\tidyar, this, \bus, bus);
+				};
+
+				Server.default.sync;
+				
+				(node = Library.at(\tidyar, this, \synth)) ?? {
+					out = Library.at(\tidyar, out.asSymbol, \bus);
+					if(out.isNil) { out = 0 } { out = out.index };
+					node = Synth(def.asSymbol, args ++ [
+						\in, bus.index,
+						\out, out,
+					]);
+					Library.put(\tidyar, this, \synth, node);
+				};
+
+				Server.default.sync;
+				
+				node.set(\gain, gain.asFloat.clip(0, 1));
+				args !? { args.clump(2).do { |k| node.set(k[0], k[1]) } };
+			}).play;
+		}
+		{
+			"strange input %".format(in.class).postln;
+		}
+	}
+
+	hush { |seconds=1| JSTidy.hush(this, seconds) }
+
+	// control value, use in a UGen Function
+	bus { ^Library.at(\tidykr, this, \bus) }
 }
 
-+ ProxySpace {
+/*
+	some ideas:
 
-	bpm { |bpm|
-		if(clock.isNil, {	this.makeTempoClock });
-		clock.schedAbs(clock.nextBar, { clock.tempo_(bpm / 60) });
-	}
+    \a -- "once" | <some stuff> would play <some stuff> once
 
-	bpb { |bpb|
-		if(clock.isNil, {	this.makeTempoClock });
-		clock.schedAbs(clock.nextBar, {
-			clock.beatsPerBar_(bpb);
-			this.quant_(bpb);
-		});
-	}
+    \a -- "stack" [
+      \ -- <sequence 1>,
+      \ -- <sequence 2>,
+    ] - <other functions>
 
-	config { |bpm, bpb|
-		if(clock.isNil, {	this.makeTempoClock });
-		clock.schedAbs(clock.nextBar, {
-			clock.tempo_(bpm / 60);
-			clock.beatsPerBar_(bpb);
-			this.quant_(bpb);
-		});
-	}
+	- "rot" function: rotate the cycle left or right for certain number
+	of steps, given by a pattern (0 = no rotation).
 
-	hush { |fade=8|
-		Routine {
-			this.stop(fade);
-			fade.wait;
-			JSTidy.stop;
-			1.wait;
-			this.clear.pop;
-			"hushed".postln;
-		} .play
-	}
-}
+	- "slice"/"splice" : note:slice_number. rate = (note - 60).midiratio
+
+	- "life" : bring in small random variations (wow:flutter)
+
+	- use Shaper.ar to create distortion effects
+*/
+

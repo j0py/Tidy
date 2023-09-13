@@ -1,7 +1,7 @@
 (
   name: "Tidy",
   summary: "Combine function/pattern pairs in SuperCollider like in Tidal Cycles.",
-  version: "1.0.0",
+  version: "1.0.1",
   schelp: "Tidy",
   dependencies: [ "Pmini" ],
   license: "GPL",
