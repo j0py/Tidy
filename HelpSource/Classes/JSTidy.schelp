@@ -1,50 +1,46 @@
 TITLE:: JSTidy
-summary:: Use Tidal Cycles syntax in SuperCollider's Interpreter
+summary:: Use Tidal Cycles syntax in SuperCollider
 categories:: mini-notation, sequencing
 related:: Classes/JSMini, Classes/JSSamples
 
 DESCRIPTION::
-Combining ProxySpace, JSMini (mini-notation parser) and JSSamples with SuperCollider's Interpreter makes it possible to use almost equal syntax for combining function/pattern pairs to get sound and rhythm as in Tidal Cycles.
+Enables combining function/mini-notation-pattern pairs to trigger notes directly in SuperCollider.
 
 code::
-~a < "buf 1 <2 4>/3*2" - "snd kit1" - "~raw 0.2" - "~room 0.1"
+\a -- "buf 1 <2 4>/3*2" - "snd kit1" - "=out 0.2" - "=room 0.1"
 ::
 
-This would play buffer indexes 1,2,3,4 with some rhythm from the samples folder named "kit1" and send the audio to ~raw bus with gain 0.2, and to the ~room bus with gain 0.1.
-Re-evaluating this line of code (after changing numbers) will smoothly crossfade from the previous numbers to the new numbers at the next quantisation point.
+This would play buffer indexes 1,2,3,4 with some rhythm from the samples folder named "kit1" and send the audio to \out bus with gain 0.2, and to the \room bus with gain 0.1.
+Re-evaluating this line of code will activate your changes at the next quantisation point.
 
-The following code is not possible in SuperCollider's Interpreter:
+In Tidal Cycles you combine function/pattern pairs like so:
 
 code::
-~a < buf "1 <2 4>/3*2" - snd "kit1" - ~raw "0.2" - ~room "0.1"
+d1 $ note "1 2 3 4" # sound "kit1"
 ::
 
-The Interpreter does not know that "buf" is a function that we have defined (in a Class). For this reason, the name of the function is included as the first word in the String. The remainder of the string is the pattern. And then the Interpreter will accept the input:
+This is not possible in the Interpreter to SuperCollider, but with a few small changes, it can be done:
 
 code::
-~a < "buf 1 <2 4>/3*2" - "snd kit1" - "~raw 0.2" - "~room 0.1"
+\d1 -- "note 1 2 3 4" - "sound kit1" - "=out 1"
 ::
 
-The "<" operator is an extension on the NodeProxy class, resulting in a JSTidy object. The Interpreter works it's way from left to right, and so the "-" operator on the JSTidy object receives a String argument ("snd kit1"), does it's thing, and returns itself (a JSTidy object again). This continues until the end of the chain of operator/string combinations. At the end, the Interpreter will invoke method "printOn" on the JSTidy object, to enable it to send some info to the post window of SuperCollider. In the printOn() method, i start / replace a Routine that plays all the notes that should be played on this NodeProxy's bus.
+The "=out" bit tells Tidy to what audio bus the generated signal should be written. To make it parsable in SuperCollider, the function that you want to call is included in the string that holds the pattern. So the format is: function, a space, pattern.
 
-The "-" operator is actually the "|>" operator. In Tidal Cycles they use the "#" operator, but the Interpreter does not accept that character. All the other combining operators are as in Tidal Cycles: |>, |<, |>|, |+, |/, etc. Getting the structure from both sides can be done in Tidal Cycles with or without the vertical bars "|*|" is the same as "*". In Tidy this is not always possible in the Interpreter.
+The "-" operator is actually the "|>" operator. In Tidal Cycles they use the "#" operator, but the Interpreter does not accept that character. All the other combining operators are as in Tidal Cycles: |>, |<, |>|, |+, |/, etc. Getting the structure from both sides can be done in Tidal Cycles with or without the vertical bars: "|*|" is the same as "*". In Tidy this is not always possible in the Interpreter.
 
-The "$" operator from Tidal Cycles is also a no go within the Interpreter, and so that has been replaced by the "|" operator.
+The "$" operator from Tidal Cycles is also not possible in SuperCollider, and has been replaced by the "--" and "|" operators.
 
 code::
-~a < "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 5 6" - "snd kit1" - "~raw 0.5" - "~comb 0.1"
+\a -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 5 6" - "snd kit1" - "=out 0.5"
 ::
-
-First, the part after the "|" operator does its calculations, resulting in a cycle with 1 or more steps. And then this is input for the "off" function, which can do with it whatever it wants: add steps, copy them, shift them in time, anything. The result of that is finally played on the "~a" NodeProxy.
-
-See the README file for more information (else i would put lots of info two times in two different places).
 
 CLASSMETHODS::
 
 METHOD:: new
-You never call this yourself, it is called by a method that has been added to the NodeProxy class
+You never call this yourself, it is called by a method that has been added to the Symbol class
 
-ARGUMENT:: proxy
-the NodeProxy object that this JSTidy will play on.
+ARGUMENT:: name
+the symbol
 
 returns:: a JSTidy object

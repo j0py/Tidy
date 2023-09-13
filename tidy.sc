@@ -1,11 +1,18 @@
 // TODO: tidy should declare playbuf_stereo/mono by itself
+//       then you install the quark, and it will work immediately
 
 JSTidy {
-	classvar loglevel;
+	classvar loglevel, <postprocessors;
 
 	var <>name, <tree, cur;
 
 	*new { |name| ^super.new.name_(name) }
+
+	// func receives the step dictionary as parameter
+	*addpostprocessor { |func|
+		postprocessors = postprocessors ? List.new;
+		postprocessors.add(func);
+	}
 	
 	*should_log { |level|
 		loglevel ?? { loglevel = [] };
@@ -18,8 +25,21 @@ JSTidy {
 	}
 
 	*end { |seconds=1|
-		// TODO: end all routines
-		// Library.at(\tidyar, name, \routine) !? { |r| r.stop };
+		Library.at(\tidyar) !? { |dict|
+			dict.keys.do { |name|
+				Library.at(\tidyar, name, \routine) !? { JSTidy.hush(name, seconds) }
+			}
+		};
+
+		Library.at(\tidykr) !? { |dict|
+			Routine({
+				seconds.wait;
+				dict.keys.do { |name|
+					Library.at(\tidykr, name, \synth) !? { |synth| synth.release };
+					"released %".format(name).postln;
+				}
+			}).play;
+		};
 	}
 	
 	*hush { |name, seconds=1|
@@ -31,12 +51,43 @@ JSTidy {
 				Library.put(\tidyar, name, \routine, nil);
 				routine.stop
 			};
+			"hushed %".format(name).postln;
 		}).play;
 	}
 
-	*tempo { |tempo|
-		TempoClock.tempo_(tempo);
-		("\\tempo -- { DC.kr(" ++ tempo ++ ") }").interpret;
+	*bpm { |bpm|
+		TempoClock.tempo_(bpm/60);
+		("\\tempo -- { DC.kr(" ++ (bpm/60) ++ ") }").interpret;
+	}
+
+	// do: JSTidy.load("mysamples".resolveRelative);
+	*load { |folder|
+		var s = Server.default;
+		Routine({
+			(folder.resolveRelative +/+ "*").pathMatch.do({ |bank|
+				var index = 0;
+				(bank +/+ "*.wav").pathMatch.do({ |file|
+					Library.put(
+						\samples,
+						bank.basename.withoutTrailingSlash.asSymbol,
+						index,
+						Buffer.read(s, file)
+					);
+					index = index + 1;
+				});
+				s.sync;
+			});
+			s.sync;
+			"Loaded %".format(folder.quote).postln;
+			JSTidy.loaded;
+		}).play;
+	}
+	
+	*loaded {
+		Library.at(\samples).keysValuesDo { |k, v|
+			"(%) %".format(v.size.asString.padLeft(3), k).postln;
+		};
+		^"";
 	}
 
 	*quant { |quant| Library.put(\tidy, \quant, quant.asInteger) }
@@ -274,7 +325,7 @@ JSTidyStep {
 	}
 
 	play { |fader=1|
-		var instr, def, sustain, dx7, rootfreq;
+		var instr, def, sustain, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
 		
 		// it will be audio
@@ -304,11 +355,6 @@ JSTidyStep {
 			// if > 22 then it is a midinote, right?
 			this.put(\degree, note.asFloat);
 			this.put(\note, nil);
-		};
-
-		this.at(\dx7) !? { |preset|
-			dx7 = DX7.new.preset(preset);
-			this.put(\instrument, \dx7);
 		};
 
 		instr = dict.at(\instrument);
@@ -369,12 +415,8 @@ JSTidyStep {
 				ch = ch.asInteger - $0.asInteger;
 				dict.put(\freq, scale.degreeToFreq(ch, rootfreq, 0));
 
-				dx7 !? {
-					dict.putAll(
-						dx7.params(dict.at(\freq), dict.atFail(\vel, 64))
-					)
-				};
-
+				JSTidy.postprocessors.do { |p| p.(dict) };
+				
 				Server.default.bind {
 					synths.add(Synth(def.name, dict.asPairs));
 				};
@@ -853,33 +895,7 @@ JSTidyFP_Every : JSTidyNode {
 	}
 }
 
-// ~a << "note 1 2 3 4" |> "dx7 12921"
-// needs DX7.init. plays a dx7 preset
-// TODO: should not be intertwined with Tidy!
-//
-// the DX7 class is based on:
-// --------------------------
-// Supercollider DX7 Clone v1.0
-// Implemented by Aziz Ege Gonul for more info go to www.egegonul.com
-// Under GNU GPL 3 as per SuperCollider license
-//
-JSTidyFP_Dx7 : JSTidyNode {
-	var <>preset;
-
-	*new { |pattern|
-		^super.new("dx7").preset_(pattern.split($ ).at(0).asInteger);
-	}
-
-	get { |cycle, name|
-		cycle.steps.do { |step|	step.put(\dx7, preset) };
-		^cycle;
-	}
-}
-
-// catch-all function: the function name becomes the "thing" that you set
-// in the step dictionary. it will become a direct parameter to the
-// synthdef as the step gets played.
-//
+// OK
 JSTidyFP : JSTidyNode {
 	*new { |val, pattern|
 		var abbr = [
@@ -893,6 +909,38 @@ JSTidyFP : JSTidyNode {
 		var instance = super.new(abbr.asDict.at(val.asSymbol) ? val);
 		if(pattern.size > 0, { instance.add(JSTidyPattern(pattern)) });
 		^instance;
+	}
+
+	// abcdefg a# ab a1 a7, c5 = 60
+	notemidi { |str|
+		var octave = 5;
+		var sharp = 0;
+		var flat = 0;
+		var note = $c;
+		
+		if("abcdefg".contains(str[0])) { note = str[0] };
+		if(str.size == 2) {
+			if(str[1] == $#) { sharp = true };
+			if(str[1] == $b) { flat = true };
+			if("12345678".contains(str[1])) { octave = str[1].asInteger };
+		};
+		if(str.size == 3) {
+			if(str[1] == $#) { sharp = true };
+			if(str[1] == $b) { flat = true };
+			if("12345678".contains(str[2])) { octave = str[2].asInteger };
+		};
+
+		note = note.ascii - $a.ascii;
+		if(note >= 2) {
+			note = 12 * octave + note
+		} {
+			note = 12 * (octave - 1) + note
+		};
+
+		if(flat) { note = note - 1 };
+		if(sharp) { note = note + 1 };
+
+		^note;
 	}
 
 	get { |cycle, name|
@@ -914,9 +962,7 @@ JSTidyFP : JSTidyNode {
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "note" } {
 						if("abcdefg".contains(str[0]), {
-							// TODO: SuperCollider supports "a", "as", "ab". use that.
-							// @see helpbrowser "Literals"
-							step.put(\midinote, str.notemidi);
+							step.put(\midinote, this.notemidi(str));
 						}, {
 							step.put(\note, str.asFloat);
 						});
@@ -952,41 +998,47 @@ JSTidyFP : JSTidyNode {
 // HOOKS
 /////////////////////////////////////////////////////
 
-+ Symbol {
-	-- { |in|
-		var bus, node;
+/*
+\tidy .samples "a path"
+\tidy .tempo 110
+\tidy .end 10
 
-		case
-		{ in.isFunction }
-		{
-			// control bus
-			Routine({
-				(bus = Library.at(\tidykr, this, \bus)) ?? {
-					bus = Bus.control(Server.default, 1);
-					Library.put(\tidykr, this, \bus, bus);
-				};
+\out  .fx { |in| In.ar(in, 2) * \gain.kr(0) } .play
+\comb .fx { |in| CombL.ar(In.ar(in, 2), 0.2, 0.2, 1.0) * \gain.kr(0) } .play(\out, 0.1)
+\room .fx \eliverb .play(\out, 0.1, [dec: 1])
 
-				Library.at(\tidykr, this, \synth) !? { |node| node.free };
+*/
 
-				Server.default.sync;
+JSTidyFX {
+	var <>name, <>func_or_symbol;
 
-				node = in.play(nil, bus.index);
-				Library.put(\tidykr, this, \synth, node);
-			}).play;
-		}
-		{ in.isString }
-		{
-			// sequencer
-			^JSTidy(this).add_branch("--").add_func(in)
-		}
-		{ in.isArray }
-		{
-			// stereo fx bus
-			var out, gain, def, args;
-			# out, gain, def, args = in;
+	*new { |name, func_or_symbol| ^super.newCopyArgs(name, func_or_symbol) }
 
-			// make "=sin" syntax possible
-			args = args.collect { |el, i|
+	play { |out=0, gain=0, args, target|
+		var in, node, old, addAction;
+
+		gain = gain.asFloat.clip(0, 1);
+		args = args ? [];
+		
+		Routine({
+			// create audio input bus for the effect
+			(in = Library.at(\tidyar, name.asSymbol, \bus)) ?? {
+				in = Bus.audio(Server.default, 2);
+				Library.put(\tidyar, name.asSymbol, \bus, in);
+			};
+
+			Server.default.sync;
+
+			case
+			{ out.isInteger } { out = out.asInteger }
+			{ (out = Library.at(\tidyar, out.asSymbol, \bus)).notNil }
+			{ out = out.index }
+			{ out = 0 };
+
+			args = args ++ [\in, in.index, \gain, gain];
+
+			// make controlbus mapping possible with "=xxx" syntax
+			args = args.collect({ |el, i|
 				var result = el;
 
 				if(((i % 2) == 1).and(el.isString)) {
@@ -999,40 +1051,97 @@ JSTidyFP : JSTidyNode {
 				};
 				
 				result;
+			});
+
+			old = Library.at(\tidyar, name.asSymbol, \synth);
+			target !? { target = Library.at(\tidyar, target.asSymbol, \synth) };
+			target ?? { target = old };
+			addAction = \addToHead;
+			target !? { addAction = \addBefore };
+
+			case
+			{ func_or_symbol.isFunction }
+			{
+				// the function must expect an \in argument
+				// the function may use the \gain argument
+				node = func_or_symbol.play(
+					target: target,
+					addAction: addAction,
+					outbus: out,
+					fadeTime: 0.5,
+					args: args
+				);
+			}
+			{
+				// the synthdef should have a sustaining envelope with \gate arg
+				// the synthdef must use an \in and \out bus argument
+				// the synthdef may use the \gain argument
+				node = Synth(
+					defName: func_or_symbol.asSymbol,
+					args: args ++ [\out, out],
+					target: target,
+					addAction: addAction
+				);
 			};
+
+			old !? { old.release };
 			
+			Server.default.sync;
+
+			Library.put(\tidyar, name.asSymbol, \synth, node);
+		}).play;
+	}
+}
+
+
++ Symbol {
+	end { |fadeTime| if(this == \tidy) { JSTidy.end(fadeTime) } }
+
+	bpm { |bpm| if(this == \tidy) { JSTidy.bpm(bpm) } }
+
+	quant { |quant| if(this == \tidy) { JSTidy.quant(quant) } }
+
+	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
+	
+	loaded { if(this == \tidy) { JSTidy.loaded } }
+	
+	scope { if(this == \tidy) { Server.default.scope.window.alwaysOnTop_(true) } }
+
+	fx { |in| ^JSTidyFX(this, in) }	// return an object back to the Interpreter
+	
+	-- { |in|
+		var bus, node;
+
+		case
+		{ in.isFunction }
+		{
 			Routine({
-				(bus = Library.at(\tidyar, this, \bus)) ?? {
-					bus = Bus.audio(Server.default, 2);
-					Library.put(\tidyar, this, \bus, bus);
+				// create control bus
+				(bus = Library.at(\tidykr, this, \bus)) ?? {
+					bus = Bus.control(Server.default, 1);
+					Library.put(\tidykr, this, \bus, bus);
 				};
 
-				Server.default.sync;
-				
-				(node = Library.at(\tidyar, this, \synth)) ?? {
-					out = Library.at(\tidyar, out.asSymbol, \bus);
-					if(out.isNil) { out = 0 } { out = out.index };
-					node = Synth(def.asSymbol, args ++ [
-						\in, bus.index,
-						\out, out,
-					]);
-					Library.put(\tidyar, this, \synth, node);
-				};
+				Library.at(\tidykr, this, \synth) !? { |node| node.release };
+
+				node = in.play(nil, bus.index);
 
 				Server.default.sync;
-				
-				node.set(\gain, gain.asFloat.clip(0, 1));
-				args !? { args.clump(2).do { |k| node.set(k[0], k[1]) } };
+
+				Library.put(\tidykr, this, \synth, node);
 			}).play;
 		}
+		{ in.isString }
 		{
-			"strange input %".format(in.class).postln;
+			^JSTidy(this).add_branch("--").add_func(in)
+		}
+		{
+			"strange input %".format(in.class).postln
 		}
 	}
 
 	hush { |seconds=1| JSTidy.hush(this, seconds) }
 
-	// control value, use in a UGen Function
 	bus { ^Library.at(\tidykr, this, \bus) }
 }
 
@@ -1049,10 +1158,19 @@ JSTidyFP : JSTidyNode {
 	- "rot" function: rotate the cycle left or right for certain number
 	of steps, given by a pattern (0 = no rotation).
 
-	- "slice"/"splice" : note:slice_number. rate = (note - 60).midiratio
-
 	- "life" : bring in small random variations (wow:flutter)
 
+    - "seed 1234" : control randomness
+
 	- use Shaper.ar to create distortion effects
+
+    - "str 1000100101", "hex 7fa4" to generate/override structure
+
+	- "slow 2" should not want to supply structure, and then
+      "slow 2" - "buf 1 2 3 4" will take the structure of "buf 1 2 3 4"
+
+	- "gain 0" master gain per orbit
+
+	- fx: play to more than 1 output bus?
 */
 
