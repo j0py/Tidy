@@ -51,7 +51,7 @@ The ```\samples``` symbol is hard-coded, the ```\animals``` symbol is called the
 
 ## the Mixer
 
-The Mixer is a collection of "effects", each gaving their own stereo input bus, and each writing to some other stereo bus or hardware output.
+The Mixer is a collection of "effects", each having their own stereo input bus, and each writing to some other stereo bus or hardware output.
 
 You need at least 1 "strip" in the mixer, where you can send audio signals, that will then go to the hardware output (bus 0).
 
@@ -59,7 +59,7 @@ You need at least 1 "strip" in the mixer, where you can send audio signals, that
 \out  .fx { |in, gain| In.ar(in, 2) * gain } .play(0, 1)
 ```
 
-The ".fx" function on the Symbol class receives a Function argument. The function (defined between the "{}" brackets) expects 2 arguments: the index of a bus to read signal from, and a gain. The function above does nothing special with the signal, just reads is from the given input bus, multiplies it with the gain and returns the resulting signal.
+The ".fx" function on the Symbol class receives a Function argument. The function (defined between the "{}" brackets) expects 2 arguments: the index of a bus to read signal from, and a gain. The function above does nothing special with the signal, just reads it from the given input bus, multiplies it with the gain and returns the resulting signal.
 
 The result of the ".fx" function, called with a Function as argument, is an object that understands the ".play" method. This method needs 2 arguments: the index of a bus to write the signal to, or the name of an earlier defined fx. The second argument is again the gain. The ".play" method creates a synth from the function and it makes this synth write its output to the given output bus. The gain is passed into the synth as a parameter (the second parameter of the function).
 
@@ -95,7 +95,7 @@ For each chunk of 64 samples, roughly this happens:
 
 The computer needs far less than 64 / 48000 seconds to do these calculations, and so this is very well possible. If the computer would be too slow to calculate the audio in time, you will hear it, and in the post window there will be "late" messages.
 
-So if there is a Reverberation synth in he server that reads from bus A, adds reverberation, and writes the output to bus B, then other Synths who's output need to be reverberated must write their signal to bus A BEFORE the Reverberation synth reads it. This is known as the "Order of execution" problem, and in the SuperCollider docs it is explained much better that i did just now.
+So if there is a Reverberation synth in the server that reads from bus A, adds reverberation, and writes the output to bus B, then other Synths who's output need to be reverberated must write their signal to bus A BEFORE the Reverberation synth reads it. This is known as the "Order of execution" problem, and in the SuperCollider docs it is explained much better than i did just now.
 
 When adding Synths (effects as well as triggered notes) Tidy always uses "addToHead", which is the default of SuperCollider. So you if start Synth A and then Synth B, then Synth B will calculate it's 64 samples BEFORE Synth A does. Synth B sits "on top" of the stack.
 
@@ -103,7 +103,7 @@ This is why when using Tidy, first the Mixer must be created, and then you can t
 
 Still, you can replace an effect synth by re-evaluating it's code (possibly with changed parameters or gain). A new Synth will be added immediately before the old one in the stack of Synths and then the old one will be "released". The order of execution will remain valid.
 
-To make this possible, your effect SynthDef must use a sustained envelope with gate argument: the old effect synth can then fade out after being released, while the new effect synth is started. If you use ```Env.asr(0.5, 1, 0.5).kr(2, \gate.kr(1))``` then the switch of synths will go smoothly.
+To make this possible, your effect SynthDef must use a sustained envelope with gate argument: the old effect synth can then fade out after being released, while the new effect synth is started. If you use ```Env.asr(0.5, 1, 0.5).kr(2, \gate.kr(1))``` then the switch of synths will go smoothly because they have 0.5 second attack (fade-in) and 0.5 second release (fade-out).
 
 ## Sequencing
 
@@ -113,13 +113,13 @@ The "--" operator has been added to the Symbol class in SuperCollider, and it ex
 \a -- "buf 0" - "snd hi" - "=out 0.5"
 ```
 
-The String argument contains the "buf" function and the mini-notation pattern "0". So buffer the index is 0 during the whole cycle.
+The String argument contains the "buf" function and the mini-notation pattern "0". So the buffer index value will be 0 during the whole cycle.
 
-The result of the "--" operator is a JSTidy object. The Interpreter then continues using that object. It encounters a "-" operator with, again, a String argument. Of course, the JSTidy object has a "-" method defined, and so this method is called. The result of that call will be the same JSTidy object. And so you can have as many "-" operators with string arguments as you want.
+The result of the "--" operator is a JSTidy object. The Interpreter then continues using that object. It encounters a "-" operator with, again, a String argument. Of course, the JSTidy object has a "-" method defined, and so this method is called. The result of that call will be the same JSTidy object. And so you can have as many "-" operators with string arguments as you want. They all add their littke bit of information to the JSTidy object.
 
 If the function name in the String arguments has a "=" as first character, then it means that the rest of the name of the function is in fact the name of an output bus where the triggered sound must be sent to. The pattern in that case is a mini-notation pattern for the volume of the triggered notes. In the example above, the triggered Synths will write to the bus of the \out effect, with a gain of 0.5.
 
-When the SuperCollider Interpreter has finished processing all input, the "printOn" method is called on the resulting object (which is a JSTidy object). Normally, an object is expected to post something in the post window in the "printOn" method. JSTidy soes that too, but it also starts a Routine that will start sequencing notes at the next quantisation point.
+When the SuperCollider Interpreter has finished processing all input, the "printOn" method is called on the resulting object (which is a JSTidy object). Normally, an object is expected to post something in the post window in the "printOn" method. JSTidy does that too, but it also starts a Routine that will start sequencing notes at the next quantisation point.
 
 Re-evaluating the input line will stop the old routine and start a new one at the next quantisation point.
 
@@ -127,7 +127,7 @@ To support the "stack" function of Tidal Cycles, the "--" operator has also been
 
 ```
 (
-\a -- "seq 0 1 2 1" -- [
+\a -- "seq 0 2 1" -- [
    \ -- "note 1 2 3" - "sound bd",
    \ -- "note 4 5 6" - "sound sn",
    \ -- "note 6 5 4" - "sound sn",
@@ -135,13 +135,13 @@ To support the "stack" function of Tidal Cycles, the "--" operator has also been
 )
 ```
 
-So after processing "--" with the "seq 0 1 2 1" argument, the Interpreter has a JSTidy object as result. Then comes the "--" operator with an array as argument. The Interpreter will then first parse each array element, which results in an array of JSTidy objects. And this array of JSTidy objects is then the parameter for the "--" operator. The JSTidy object stores the array, and returns itself. And then the Interpreter continues by parsing "-" and "=out 0.5".
+So after processing "--" with the "seq 0 2 1" argument, the Interpreter has a JSTidy object as result. Then comes the "--" operator with an array as argument. The Interpreter will then first parse each array element, which results in an array of JSTidy objects. And this array of JSTidy objects is then the parameter for the "--" operator. The JSTidy object stores the array, and returns itself. And then the Interpreter continues by parsing "-" and "=out 0.5".
 
-The "seq" function will let the JSTidy objects in the array generate the triggers for the next cycle. So the first cycle will be filled by the JSTidy object on index 0 inside the array. The next cycle will be done by the JSTidy object on index 1 etc etc.
+The "seq" function will let the JSTidy objects in the array generate the triggers for the next cycle. So the first cycle will be filled by the JSTidy object on index 0 inside the array. The next cycle will be done by the JSTidy object on index 2 and so on. After the pattern has been run through, it will start again from the beginning.
 
 The "stack" function will soon be implemented, and it should just combine all triggers from all JSTidy objects in the array into 1 (busy) cycle.
 
-Instead of the "-" operator, you can also use "|>", "|+", "|*", "|<", "|/", "|%" operators or their related ones with different "where the structure comes from": "|>", ">|", "|>|". The "-" is the shortcut for "|>" (structure from the left, values from the right).
+Instead of the "-" operator, you can also use "|>", "|+", "|*", "|<", "|/", "|%" operators or their related ones with different "where the structure comes from": "|>", ">|", "|>|". The "-" is the shortcut for "|>" (structure from the left, values from the right). In Tidal Cycles they use the "#" character for that, but in SuperCollider that character has special meaning and cannot be used as an operator.
 
 ## Sends
 
@@ -172,7 +172,7 @@ If you defined only 2 outputs and the Synth receives out3/gain3 arguments, then 
 
 ## Functions supported by JSTidy
 
-Today (2023-08-09) i have these functions implemented, but they need some thorough testing:
+Today (2023-08-09) i have these functions implemented, but they need thorough testing (and documentation :-) :
 
 - jux ```\a -- "jux 0.6" |> "rev" | etc ```
 - off ```\a -- "off 0.25" |+ "n 7" | etc ```
@@ -192,12 +192,14 @@ The "etc" bit is first asked for the next cycle, and then that cycle is messed u
 The rules for function names are (up until now):
 - if the name of a function starts with a "=", then it is treated as a send.
 - if the name of a function exists as a function class (prefixed with "JSTidyFP_") then an object of that class is used.
-- in all other cases, the function name is just added as an argument to the synth, with its value coming from the pattern.
+- in all other cases, the function name is just added as an argument to the synth, with its (float) value coming from the pattern.
 
 So if you come up with a new SynthDef which has exotic parameter "xyz", then you can supply values for that parameter straightaway.
 
 ## Roadmap (2023-09-13)
 
-I will make some Youtube videos to show you how you can use Tidy.
+I will make some Youtube videos to show you how you can use Tidy. But for that i must first create my own cool sounds and/or samples.
 
-The Stack function i will implement.
+The Stack function needs to be implemented.
+
+Have lots of fun live coding from scratch with this.
