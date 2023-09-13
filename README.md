@@ -46,8 +46,8 @@ The WAV files "mysamples/animals/*.wav" for example will be stored (in Buffer ob
 ```
 Library.at(\samples, \animals, index)
 ```
+
 The ```\samples``` symbol is hard-coded, the ```\animals``` symbol is called the name of the folder containing the samples, the ```index``` is just a numerical index of each sample.
-```
 
 ## the Mixer
 
