@@ -5,7 +5,7 @@ Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider I
 
 First i wrote a mini-notation parser, JSMiniParser, and this resulted in the Pmini quark, where you can use mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, and so you need to install the Pmini quark if you wish to install the Tidy quark.
 
-In the usage example below, you see me using some JSSamples class. This is a small class that makes it easier to load and use audio samples. It is included in the Tidy quark, but i could also publish it as a separate quark. Not sure what is the best thing to do here. All these quarks tend to get entangled with each other..
+In the usage example below, you see me using some JSSamples class. This is a small class that makes it easier to load and use audio samples. It is included in the Tidy quark, but i could also publish it as a separate quark. Not sure what is the best thing to do here. All these quarks tend to get entangled with each other.
 
 ## Usage example
 
