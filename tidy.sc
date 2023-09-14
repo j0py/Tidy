@@ -1,5 +1,21 @@
-// TODO: tidy should declare playbuf_stereo/mono by itself
-//       then you install the quark, and it will work immediately
+// TODO:
+//
+// - tidy should declare playbuf_stereo/mono by itself
+//   then you install the quark, and it will work immediately
+// - rec/play function
+// - practice
+// - maybe a fadein function as the oppsite of the hush function
+// - why is the hush function not like \a --"hush"
+// - still need a "once" function: \a -- "once" | etc
+// - supply structure with "hits 100010011" function (or hex)
+// - "do" function: \a -- "do 3" | etc  : repeats the thing 3 times
+// - "skipdo" function: \a -- "skipdo 0 2 4 2 -3 2" | etc
+//   skips 0 cycles, plays 2 cycles, skips 4 cycles, plays 2 cycles
+//   skips back 3 cycles, plays 2 cycles. cycles played: 0,1,6,7,5,6
+
+// - "do" function: \a -- "do 0 1 6 7 5 6" | etc : plays given cycle numbers
+//   could be a pattern of course! all nodes need a "reset" function then
+//   and maybe a "skipto" function too. or add extra arg to get() function
 
 JSTidy {
 	classvar loglevel, <postprocessors;
@@ -91,6 +107,72 @@ JSTidy {
 	}
 
 	*quant { |quant| Library.put(\tidy, \quant, quant.asInteger) }
+
+	add_playbuf_synthdefs {
+
+		SynthDef(\playbuf_stereo, {
+			arg freq=440, secs=0, begin=0, end=1, speed=1, pan=0,
+			vel=0.5, att=0.02, crv=(-4), bufnum, splice=0;
+			var line, env, hold, rate, frames, sig, secs_needed;
+
+			frames = BufFrames.kr(bufnum);
+			rate = BufRateScale.kr(bufnum);
+			rate = rate * freq / (60.midicps);
+			secs_needed = (end - begin) * frames / SampleRate.ir;
+
+			secs = Select.kr(splice > 0, [max(secs, secs_needed), secs]);
+			rate = Select.kr(splice > 0, [rate, rate * secs_needed / secs]);
+
+			line = Line.ar(0, 1, secs, doneAction:2);
+			hold = max(0, 1 - att - att);
+			att = att / (att + hold + att);
+			hold = hold / (att + hold + att);
+			env = IEnvGen.ar(Env([0,1,1,0],[att,hold,att],crv), line);
+
+			sig = PlayBuf.ar(2, bufnum, speed * rate, 1, begin * frames, 0, 2);
+			sig = sig * env;
+			//sig = vel.clip(0, 1) * sig;
+			sig = vel * sig;
+			sig = LeakDC.ar(sig);
+			sig = Splay.ar(sig, 0, 1, pan);
+
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0) * \gain.kr(1));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0) * \gain.kr(1));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0) * \gain.kr(1));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0) * \gain.kr(1));
+		}).add;
+
+		SynthDef(\playbuf_mono, {
+			arg freq=440, secs=0, begin=0, end=1, speed=1, pan=0,
+			vel=0.5, att=0.02, crv=(-4), bufnum, splice=0;
+			var line, env, hold, rate, frames, sig, secs_needed;
+
+			frames = BufFrames.kr(bufnum);
+			rate = BufRateScale.kr(bufnum);
+			rate = rate * freq / (60.midicps);
+			secs_needed = (end - begin) * frames / SampleRate.ir;
+
+			secs = Select.kr(splice > 0, [max(secs, secs_needed), secs]);
+			rate = Select.kr(splice > 0, [rate, rate * secs_needed / secs]);
+
+			line = Line.ar(0, 1, secs, doneAction:2);
+			hold = max(0, 1 - att - att);
+			att = att / (att + hold + att);
+			hold = hold / (att + hold + att);
+			env = IEnvGen.ar(Env([0,1,1,0],[att,hold,att],crv), line);
+
+			sig = PlayBuf.ar(1, bufnum, speed * rate, 1, begin * frames, 0, 2);
+			sig = sig * env;
+			sig = vel.clip(0, 1) * sig;
+			sig = LeakDC.ar(sig);
+			sig = Splay.ar(sig, 0, 1, pan);
+
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0) * \gain.kr(1));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0) * \gain.kr(1));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0) * \gain.kr(1));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0) * \gain.kr(1));
+		}).add;
+	}
 	
 	printOn { |stream|
 		// if tree is nil then something has gone wrong during the
@@ -109,13 +191,17 @@ JSTidy {
 
 			// a logical cycle lasts 1 beat in my system, quant is in beats
 			Library.put(\tidyar, name, \evaluated, Routine({
-				var quant, nudge=0.001, now=thisThread.beats, wait;
+				var quant, nudge=0.001, now, wait;
 
+				this.add_playbuf_sythdefs;
+				Server.default.sync; // this might take some time
+				
+				now = thisThread.beats; // so do quantisation now
 				quant = (Library.at(\tidy, \quant) ? 4).asInteger;
 
 				// stop the old routine <nudge> before starting the new
 				// nudge=0 : old routine triggers one more note, while the
-				// new routine also triggers -> double notes!
+				// new routine also triggers it -> double notes!
 				wait = (now + quant).div(quant) * quant - now;
 				if(wait < nudge) { wait = wait + quant };
 				
