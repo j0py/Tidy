@@ -1,21 +1,20 @@
 // TODO:
 //
-// - tidy should declare playbuf_stereo/mono by itself
-//   then you install the quark, and it will work immediately
-// - rec/play function
 // - practice
-// - maybe a fadein function as the oppsite of the hush function
-// - why is the hush function not like \a --"hush"
-// - still need a "once" function: \a -- "once" | etc
-// - supply structure with "hits 100010011" function (or hex)
-// - "do" function: \a -- "do 3" | etc  : repeats the thing 3 times
-// - "skipdo" function: \a -- "skipdo 0 2 4 2 -3 2" | etc
-//   skips 0 cycles, plays 2 cycles, skips 4 cycles, plays 2 cycles
-//   skips back 3 cycles, plays 2 cycles. cycles played: 0,1,6,7,5,6
 
-// - "do" function: \a -- "do 0 1 6 7 5 6" | etc : plays given cycle numbers
-//   could be a pattern of course! all nodes need a "reset" function then
-//   and maybe a "skipto" function too. or add extra arg to get() function
+// - maybe a fadein function as the opposite of the hush function
+// - why is the hush function not like \a --"hush"
+
+// - "once" function: \a -- "once" | etc
+
+// - override structure with "hits 100010011" function (or hex)
+
+// - "rep" function: \a -- "rep 3" | etc  : repeat all cycles 3 times
+
+// - "do" function: \a -- "do 0 1 6 7 5 6" | etc : play the given cycles.
+//   is a pattern of course!
+
+// - rec/play function for live record / playback as a sample
 
 JSTidy {
 	classvar loglevel, <postprocessors;
@@ -193,7 +192,7 @@ JSTidy {
 			Library.put(\tidyar, name, \evaluated, Routine({
 				var quant, nudge=0.001, now, wait;
 
-				this.add_playbuf_sythdefs;
+				this.add_playbuf_synthdefs;
 				Server.default.sync; // this might take some time
 				
 				now = thisThread.beats; // so do quantisation now
