@@ -16,6 +16,8 @@
 
 // - rec/play function for live record / playback as a sample
 
+// - \tidy .help : lists all commands possible
+
 JSTidy {
 	classvar loglevel, <postprocessors;
 
@@ -42,7 +44,9 @@ JSTidy {
 	*end { |seconds=1|
 		Library.at(\tidyar) !? { |dict|
 			dict.keys.do { |name|
-				Library.at(\tidyar, name, \routine) !? { JSTidy.hush(name, seconds) }
+				Library.at(\tidyar, name, \routine) !? {
+					JSTidy.hush(name, seconds)
+				}
 			}
 		};
 
@@ -50,7 +54,9 @@ JSTidy {
 			Routine({
 				seconds.wait;
 				dict.keys.do { |name|
-					Library.at(\tidykr, name, \synth) !? { |synth| synth.release };
+					Library.at(\tidykr, name, \synth) !? { |synth|
+						synth.release
+					};
 					"released %".format(name).postln;
 				}
 			}).play;
@@ -59,7 +65,7 @@ JSTidy {
 	
 	*hush { |name, seconds=1|
 		Routine({
-			var beats = seconds / thisThread.clock.tempo;
+			var beats = max(0.2, seconds) / thisThread.clock.tempo;
 			Library.put(\tidyar, name, \fade, beats);
 			beats.wait;
 			Library.at(\tidyar, name, \routine) !? { |routine|
@@ -78,6 +84,7 @@ JSTidy {
 	// do: JSTidy.load("mysamples".resolveRelative);
 	*load { |folder|
 		var s = Server.default;
+		folder = folder.standardizePath;
 		Routine({
 			(folder.resolveRelative +/+ "*").pathMatch.do({ |bank|
 				var index = 0;
@@ -98,11 +105,19 @@ JSTidy {
 		}).play;
 	}
 	
-	*loaded {
-		Library.at(\samples).keysValuesDo { |k, v|
-			"(%) %".format(v.size.asString.padLeft(3), k).postln;
+	*loaded { |width=40|
+		var len=width;
+		"".padLeft(width, "-").postln;
+		Library.at(\samples).keys.asArray.sort.do { |k|
+			var val = Library.at(\samples, k.asSymbol);
+			var str = "% % - ".format(k, val.size);
+			if((len - (str.size)) < 0) { "".postln; len=width };
+			len = len - (str.size);
+			str.post;
 		};
-		^"";
+		"".postln;
+		"".padLeft(width, "-").postln;
+		^"".postln;
 	}
 
 	*quant { |quant| Library.put(\tidy, \quant, quant.asInteger) }
@@ -232,7 +247,9 @@ JSTidy {
 								gain = faded.linexp(0,fadebeats,1,0.001);
 							};
 							
-							if(step.trig > 0) { step.play(gain) };
+							if(step.trig > 0) {	step.play(gain) };
+							step.log;
+
 							slow = (step.at(\slow) ? "1").asFloat;
 							(step.delta * slow).wait;
 
@@ -266,13 +283,6 @@ JSTidy {
 		str = str.split($ );
 		func = str.removeAt(0);
 		pat = str.join($ ).stripWhiteSpace;
-
-		if(func[0] == $=) {
-			func = func.drop(1);
-			if(Library.at(\tidyar, func.asSymbol, \bus).notNil) {
-				^JSTidyOut(func, pat)
-			}
-		};
 
 		class = "%%".format(func[0].toUpper, func.drop(1).toLower);
 		class = "JSTidyFP_%".format(class).asSymbol.asClass;
@@ -385,17 +395,16 @@ JSTidyCycle {
 
 	printOn { |stream|
 		stream << "cycle\n";
-		steps !? { steps.do { |step| step.printOn(stream) } };
+		steps !? { steps.do { |step| step.printOn2(stream) } };
 	}
 }
 
 JSTidyStep {
-	var <>trig, <>delta, <>dur, <>dict, <>outs;
+	var <>trig, <>delta, <>dur, <>dict;
 
 	*new { |trig, delta, dur, str, num|
 		^super.newCopyArgs(trig ? 0, delta ? 1, dur ? 1)
 		.dict_(Dictionary.new)
-		.outs_(Dictionary.new)
 		.put(\str, str)
 		.put(\num, num);
 	}
@@ -404,12 +413,7 @@ JSTidyStep {
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
-	out { |to, gain|
-		//"step.out(%, %)".format(to, gain).postln;
-		outs.put(to.asSymbol, gain.asFloat)
-	}
-
-	play { |fader=1|
+	play { |gain=1|
 		var instr, def, sustain, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
 		
@@ -426,11 +430,19 @@ JSTidyStep {
 				};
 				this.put(\bufnum, buf.bufnum);
 			};
-
-			this.put(\snd, nil);
-			this.put(\buf, nil);
 		};
 
+		this.at(\play) !? { |rec|
+			Library.at(\tidyrec, rec.asSymbol) !? { |buf|
+				if(buf.numChannels > 1) {
+					this.put(\instrument, \playbuf_stereo);
+				} {
+					this.put(\instrument, \playbuf_mono);
+				};
+				this.put(\bufnum, buf.bufnum);
+			}
+		};
+		
 		this.at(\def) !? { |def|
 			this.put(\instrument, def.asSymbol);
 			this.put(\def, nil);
@@ -476,15 +488,8 @@ JSTidyStep {
 		/ (dict.at(\fast) ? 1);
 		dict.put(\secs, sustain / thisThread.clock.tempo);   // in seconds
 
-		outs.keys.do { |name, i|
-			var gain = outs.at(name) * fader;
-			var bus_index = Library.at(\tidyar, name, \bus).index;
-			//"step.play out % %".format(bus_index, gain).postln;
-			dict.put(("out"++((i+1).asString)).asSymbol, bus_index);
-			dict.put(("gain"++((i+1).asString)).asSymbol, gain.asFloat);
-		};
-
-		if(JSTidy.should_log(\step), { this.postln });
+		dict.put(\gain, gain);
+		this.put_sends;
 
 		//                         degree, root, octave
 		//Scale.major.degreeToFreq(2, 60.midicps, 1);
@@ -520,12 +525,63 @@ JSTidyStep {
 		}).play;
 	}
 
+	put_sends {
+		var i = 1;
+		Library.at(\tidyar).keys.do { |key|
+			Library.at(\tidyar, key.asSymbol, \bus) !? { |bus|
+				this.at(key.asSymbol) !? { |gain|
+					gain = gain.asFloat;
+					this.put(("out"++(i.asString)).asSymbol, bus.index);
+					this.put(("gain"++(i.asString)).asSymbol, gain);
+					i = i + 1;
+				}
+			}
+		}
+	}
+	
+	log {
+		if(JSTidy.should_log(\step)) {
+			this.postln;
+		} {
+			if((this.at(\log) ? 0) > 0) {
+				this.postln;
+			}
+		}
+	}
+	
 	printOn { |stream|
-		stream << "step % % % ".format(
+		var width=40;
+		var len=width;
+		
+		stream << "step\ntrig:% delta:% dur:%\n".format(
+			trig,
+			delta.round(0.01),
+			dur.round(0.01)
+		);
+
+		dict.keys.asArray.sort.do { |k|
+			var str, val = dict.at(k.asSymbol);
+			if(k != \log) {
+				if(val.isFloat) { val = val.round(0.01) };
+				str = "%:% ".format(k, val);
+				if((len - (str.size)) < 0) { stream << "\n"; len=width; };
+				stream << str;
+				len = len - str.size;
+			};
+		};
+		
+		//dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
+		//outs.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
+		stream << "\n";
+	}
+
+	printOn2 { |stream|
+		stream << "step % % %".format(
 			trig,
 			delta.round(0.01).asString.padLeft(6),
 			dur.round(0.01).asString.padLeft(6)
 		);
+
 		dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
 		//outs.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
 		stream << "\n";
@@ -736,23 +792,6 @@ JSTidyPattern : JSTidyNode {
 	}
 }
 
-JSTidyOut : JSTidyNode {
-	*new { |fx, pattern|
-		^super.new(fx).add(JSTidyPattern(pattern))
-	}
-
-	get { |cycle, name|
-		var time, gains = children.first.get(cycle, name);
-		
-		time = 0;
-		cycle.steps.do { |step|
-			step.out(val, gains.at(time).at(\str).asFloat);
-			time = time + step.delta;
-		};
-		^cycle;
-	}
-}
-
 // play sub-sequences
 JSTidyFP_Seq : JSTidyNode {
 	var seq; // a queue of steps
@@ -955,12 +994,16 @@ JSTidyFP_Slice : JSTidyNode {
 	}
 }
 
-// do something extra every nth cycle
+// \a -- "every 8 -1" >| "b 1 2 3 4" | etc
+// every will take action when turn equals 7, 15, 23, etc
 JSTidyFP_Every : JSTidyNode {
-	var <>when, turn;
+	var <>when, <>offset, turn;
 
 	*new { |pattern|
-		^super.new("every").when_(pattern.split($ ).at(0).asInteger);
+		var split = pattern.split($ );
+		^super.new("every")
+		.when_(split.at(0).asInteger)
+		.offset_((split.at(1) ? "0").asInteger);
 	}
 
 	become_cur_after_add { ^true }
@@ -970,11 +1013,13 @@ JSTidyFP_Every : JSTidyNode {
 
 		// let your children alter the cycle when it is your turn
 		turn = (turn ? -1) + 1;
-		if((turn % when) == 0, {
-			children.drop(-1).do { |child|
-				cycle = child.get(cycle, name)
+		if(turn > 0) {
+			if(((turn + (0 - offset)) % when) == 0) {
+				children.drop(-1).do { |child|
+					cycle = child.get(cycle, name)
+				};
 			};
-		});
+		};
 
 		^cycle;
 	}
@@ -992,6 +1037,7 @@ JSTidyFP : JSTidyNode {
 			\oct, "octave",
 		];
 		var instance = super.new(abbr.asDict.at(val.asSymbol) ? val);
+		if(val == "log") { pattern = "1" };
 		if(pattern.size > 0, { instance.add(JSTidyPattern(pattern)) });
 		^instance;
 	}
@@ -1041,10 +1087,12 @@ JSTidyFP : JSTidyNode {
 				} {
 					// interpret str depending on the function name (val)
 					case
+					{ str == "~" } { step.trig = 0 }
 					{ val == "def" } { step.put(\def, str.asSymbol) }
 					{ val == "buf" } { step.put(\buf, str.asInteger) }
 					{ val == "vel" } { step.put(\vel, str.asFloat) }
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
+					{ val == "play" } { step.put(\play, str.asSymbol) }
 					{ val == "note" } {
 						if("abcdefg".contains(str[0]), {
 							step.put(\midinote, this.notemidi(str));
@@ -1057,8 +1105,6 @@ JSTidyFP : JSTidyNode {
 						step.put(\speed, str.asFloat.midiratio)
 					}
 					{ step.put(val.asSymbol, str.asFloat) };
-
-					if(str == "~") { step.trig = 0 };
 				};
 			};
 
@@ -1083,21 +1129,12 @@ JSTidyFP : JSTidyNode {
 // HOOKS
 /////////////////////////////////////////////////////
 
-/*
-\tidy .samples "a path"
-\tidy .tempo 110
-\tidy .end 10
-
-\out  .fx { |in| In.ar(in, 2) * \gain.kr(0) } .play
-\comb .fx { |in| CombL.ar(In.ar(in, 2), 0.2, 0.2, 1.0) * \gain.kr(0) } .play(\out, 0.1)
-\room .fx \eliverb .play(\out, 0.1, [dec: 1])
-
-*/
-
 JSTidyFX {
 	var <>name, <>func_or_symbol;
 
-	*new { |name, func_or_symbol| ^super.newCopyArgs(name, func_or_symbol) }
+	*new { |name, func_or_symbol|
+		^super.newCopyArgs(name, func_or_symbol)
+	}
 
 	play { |out=0, gain=0, args, target|
 		var in, node, old, addAction;
@@ -1139,7 +1176,9 @@ JSTidyFX {
 			});
 
 			old = Library.at(\tidyar, name.asSymbol, \synth);
-			target !? { target = Library.at(\tidyar, target.asSymbol, \synth) };
+			target !? {
+				target = Library.at(\tidyar, target.asSymbol, \synth)
+			};
 			target ?? { target = old };
 			addAction = \addToHead;
 			target !? { addAction = \addBefore };
@@ -1158,7 +1197,8 @@ JSTidyFX {
 				);
 			}
 			{
-				// the synthdef should have a sustaining envelope with \gate arg
+				// the synthdef should have a sustaining envelope
+				// with \gate arg
 				// the synthdef must use an \in and \out bus argument
 				// the synthdef may use the \gain argument
 				node = Synth(
@@ -1175,16 +1215,17 @@ JSTidyFX {
 
 			Library.put(\tidyar, name.asSymbol, \synth, node);
 		}).play;
+
+		^"fx: %% ".format("\\", name);
 	}
 }
 
-
 + Symbol {
-	end { |fadeTime| if(this == \tidy) { JSTidy.end(fadeTime) } }
+	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
 
-	bpm { |bpm| if(this == \tidy) { JSTidy.bpm(bpm) } }
+	bpm { |bpm=60| if(this == \tidy) { JSTidy.bpm(bpm) } }
 
-	quant { |quant| if(this == \tidy) { JSTidy.quant(quant) } }
+	quant { |quant=4| if(this == \tidy) { JSTidy.quant(quant) } }
 
 	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
 	
@@ -1192,7 +1233,7 @@ JSTidyFX {
 	
 	scope { if(this == \tidy) { Server.default.scope.window.alwaysOnTop_(true) } }
 
-	fx { |in| ^JSTidyFX(this, in) }	// return an object back to the Interpreter
+	fx { |in| ^JSTidyFX(this, in) }	// return object to the Interpreter
 	
 	-- { |in|
 		var bus, node;
@@ -1228,6 +1269,54 @@ JSTidyFX {
 	hush { |seconds=1| JSTidy.hush(this, seconds) }
 
 	bus { ^Library.at(\tidykr, this, \bus) }
+
+	rec { |name, beats, bus, nudge=(-0.25)|
+		if(this != \tidy) { ^super.rec };
+		
+		Routine({
+			var sec, buf, old;
+			var now, quant, wait;
+
+			sec = beats / thisThread.clock.tempo;
+			"rec % beats".format(beats).postln;
+
+			buf = Buffer.alloc(
+				Server.default,
+				sec * Server.default.sampleRate,
+				2);
+
+			Server.default.sync;
+
+			"rec bufnum %".format(buf.bufnum).postln;
+
+			// calculate how long to wait for quant point
+			now = thisThread.beats;
+			quant = (Library.at(\tidy, \quant) ? 4);
+			quant = quant.asInteger;
+			wait = (now + quant).div(quant) * quant - now;
+			wait.wait;
+
+			Server.default.makeBundle(quant - nudge, {
+				Synth(\rec, [buf: buf, in: bus], nil, \addToTail);
+			});
+
+			// countdown in post window
+			quant.do { |i|
+				"..%".format(quant - i).postln;
+				1.wait;
+			};
+			"..0!".postln;
+			
+			// count up in post window (re-using wait variable)
+			beats.do { |i| "--%".format(i+1).postln; 1.wait; };
+
+			old = Library.at(\tidyrec, name.asSymbol);
+			Library.put(\tidyrec, name.asSymbol, buf);
+			old !? { |b| b.free };
+			
+			"record finished".postln;
+		}).play;
+	}
 }
 
 /*

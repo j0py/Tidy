@@ -30,6 +30,11 @@ s.boot
 \tidy .end(8)
 ```
 
+## Video examples
+
+- [tidy experiments 1: first rhythm and sound](https://youtu.be/M7O0CmNMQGI)
+- [tidy experiments 2: the rec and play function](https://youtu.be/IzgYc9P942E)
+
 ## Samples
 
 ```
