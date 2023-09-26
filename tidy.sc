@@ -2,21 +2,45 @@
 //
 // - practice
 
+// - seq should remember it's position in Library
+
+// - "drone f1 f2 f3 .."
+// - starts a BufRd with sinusoidal pos for each freq.
+//   the phase for the sinusoid (0..2pi) is random.
+//   all in one synthdef.
+
+// - splice : -4 should play slice backwards
+
 // - maybe a fadein function as the opposite of the hush function
 // - why is the hush function not like \a --"hush"
 
 // - "once" function: \a -- "once" | etc
 
-// - override structure with "hits 100010011" function (or hex)
+// - override structure with "trig 100010011" function (or hex)
 
-// - "rep" function: \a -- "rep 3" | etc  : repeat all cycles 3 times
+// - "dup" function: \a -- "dup 3" | etc  : repeat all cycles 3 times
+//   "dup 3" | etc
 
 // - "do" function: \a -- "do 0 1 6 7 5 6" | etc : play the given cycles.
 //   is a pattern of course!
 
-// - rec/play function for live record / playback as a sample
+//	- "rot" function: rotate the cycle left or right for certain number
+//	of steps, given by a pattern (0 = no rotation).
 
-// - \tidy .help : lists all commands possible
+//	- "life" : bring in small random variations (wow:flutter)
+
+//  - "seed 1234" : control randomness
+
+//	- use Shaper.ar to create distortion effects
+
+//  - "str 1000100101", "hex 7fa4" to generate/override structure
+
+//	- "slow 2" should not want to supply structure, and then
+//    "slow 2" - "buf 1 2 3 4" will take the structure of "buf 1 2 3 4"
+
+//	- fx: play to more than 1 output bus?
+
+//  - \tidy .help : lists all commands possible
 
 JSTidy {
 	classvar loglevel, <postprocessors;
@@ -488,7 +512,7 @@ JSTidyStep {
 		/ (dict.at(\fast) ? 1);
 		dict.put(\secs, sustain / thisThread.clock.tempo);   // in seconds
 
-		dict.put(\gain, gain);
+		dict.put(\gain, gain * (dict.at(\gain) ? 1));
 		this.put_sends;
 
 		//                         degree, root, octave
@@ -818,6 +842,27 @@ JSTidyFP_Seq : JSTidyNode {
 	become_cur_after_add { ^true }
 }
 
+// mix-play sub-sequences
+JSTidyFP_Stack : JSTidyNode {
+	*new { |pattern| ^super.new("stack") }
+
+	get { |cycle, name|
+		var pq=PriorityQueue.new;
+
+		children.do { |child|
+			var time = 0;
+			child.get(JSTidyCycle.new, name).steps.do { |step|
+				pq.put(time, step);
+				time = time + step.delta;
+			}
+		};
+		
+		^JSTidyCycle(this.steps_from_priority_queue(pq));
+	}
+
+	become_cur_after_add { ^true }
+}
+
 // "note 0 2 4" - "chord 123:1 135" // str = the chord, num = strum 0 - 9
 // TODO: put chord in mini-notation too: <0,2,4> strum?
 JSTidyFP_Chord : JSTidyNode {
@@ -947,6 +992,7 @@ JSTidyFP_Rev : JSTidyNode {
 	}
 }
 
+/*
 // ~a < "slice 8 1 2 3 4" | "splice 1" - ...
 JSTidyFP_Slice : JSTidyNode {
 	var <>count;
@@ -978,11 +1024,7 @@ JSTidyFP_Slice : JSTidyNode {
 			slice = (step.at(\str) ? 0).asInteger; // what slice to play
 			step.put(\str, nil);
 			step.put(\num, nil); // could use this for bufnum..
-			step2 !? {
-				step.putAll(step2.dict); // bufnum,degree,def etc
-				step.outs = step2.outs; // what bus(es) to play to
-			};
-
+			step2 !? { step.putAll(step2.dict) } // bufnum,degree,def etc
 			step.put(\begin, max(0, min(slice, count - 1)) / count);
 			step.put(\end, max(1, min(slice + 1, count)) / count);
 			step.put(\legato, 1); // in order for splice to work
@@ -992,6 +1034,56 @@ JSTidyFP_Slice : JSTidyNode {
 
 		^cycle;
 	}
+}
+*/
+
+JSTidyFP_Slice : JSTidyNode {
+	var <>count;
+
+	*new { |pattern|
+		var instance = super.new("slice");
+		var str = pattern.split($ );
+		instance.count = max(1, str.removeAt(0).asInteger);
+		pattern = str.join($ ).stripWhiteSpace;
+		if(pattern.size > 0, { instance.add(JSTidyPattern(pattern)) });
+		^instance;
+	}
+
+	become_cur_after_add { ^true }
+
+	is_splice { ^false }
+	
+	// sets \begin and \end keys and chops step into slices
+	// the structure comes from the slice pattern
+	// so you look up what sample to play in the input cycle
+	// slice will adjust duration to play the whole slice (may overlap)
+	// param splice > 0 will adjust \rate instead @see \playbuf synthdef
+	get { |cycle, name|
+		var time, input = children.last.get(cycle, name); // branch
+		cycle = children.first.get(cycle, name); // holds structure
+
+		time = 0;
+		cycle.steps.do { |step|
+			var slice, step2 = input.at(time);
+
+			slice = (step.at(\str) ? 0).asInteger; // what slice to play
+			step.put(\str, nil);
+			step.put(\num, nil); // could use this for bufnum..
+			step2 !? { step.putAll(step2.dict) }; // bufnum,degree,def etc
+			step.put(\begin, max(0, min(slice, count - 1)) / count);
+			step.put(\end, max(1, min(slice + 1, count)) / count);
+			step.put(\legato, 1); // in order for splice to work
+			if(this.is_splice) { step.put(\splice, 1) };
+			
+			time = time + step.delta;
+		};
+
+		^cycle;
+	}
+}
+
+JSTidyFP_Splice : JSTidyFP_Slice {
+	is_splice { ^true }
 }
 
 // \a -- "every 8 -1" >| "b 1 2 3 4" | etc
@@ -1221,6 +1313,17 @@ JSTidyFX {
 }
 
 + Symbol {
+	doc {
+		if(this != \tidy) { ^super.help };
+
+		"".postln;
+		"cheatsheet".postln;
+		"-------------------------------------------".postln;
+		"\\tidy .end(x) : fadeout + end in x seconds".postln;
+		
+		^"".postln;
+	}
+
 	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
 
 	bpm { |bpm=60| if(this == \tidy) { JSTidy.bpm(bpm) } }
@@ -1319,32 +1422,4 @@ JSTidyFX {
 	}
 }
 
-/*
-	some ideas:
-
-    \a -- "once" | <some stuff> would play <some stuff> once
-
-    \a -- "stack" [
-      \ -- <sequence 1>,
-      \ -- <sequence 2>,
-    ] - <other functions>
-
-	- "rot" function: rotate the cycle left or right for certain number
-	of steps, given by a pattern (0 = no rotation).
-
-	- "life" : bring in small random variations (wow:flutter)
-
-    - "seed 1234" : control randomness
-
-	- use Shaper.ar to create distortion effects
-
-    - "str 1000100101", "hex 7fa4" to generate/override structure
-
-	- "slow 2" should not want to supply structure, and then
-      "slow 2" - "buf 1 2 3 4" will take the structure of "buf 1 2 3 4"
-
-	- "gain 0" master gain per orbit
-
-	- fx: play to more than 1 output bus?
-*/
 
