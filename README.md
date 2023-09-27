@@ -175,9 +175,35 @@ So you need to include these lines in your SynthDefs, although 4 outputs is prob
 
 If you defined only 2 outputs and the Synth receives out3/gain3 arguments, then these arguments will simply not be used.
 
+## Mini-notation supported by JSTidy
+
+```
+http://tidalcycles.org/docs/reference/mini_notation/
+
+~    Create a rest                           "~ hh"
+[ ]  Create a pattern grouping               "[bd sd] hh"
+.    Shorthand for pattern grouping          "bd sd . hh hh hh"
+,    Play multiple patterns at the same time "[bd sd, hh hh hh]"
+*    Repeat a pattern                        "bd*2 sd"
+/    Slow down a pattern                     "bd/2"
+|    Create a random choice                  "[bd |cp |hh]"
+< >  Alternate between patterns              "bd <sd hh cp>"
+!    Replicate a pattern                     "bd!3 sd"
+_    Elongate a pattern                      "bd _ _ ~ sd _"
+@    Elongate a pattern                      "gong@3 gong"
+?    Randomly remove events from pattern     "bd? sd"
+:    Selecting samples                       "bd:3"
+( )  Euclidean sequences                     "bd(3,8)"
+{ }  Polymetric sequences                    "{bd bd bd bd, cp cp hh}"
+{ }% Polymetric sequence subdivision         "{bd cp hh}%8"
+```
+
+The mini-notation is handled by classes in the Pmini quark (on which the Tidy quark depends). 
+
+
 ## Functions supported by JSTidy
 
-Today (2023-08-09) i have these functions implemented, but they need thorough testing (and documentation :-) :
+Today (2023-08-09) i have the following functions implemented, but they need thorough testing (and documentation :-) :
 
 - jux ```\a -- "jux 0.6" |> "rev" | etc ```
 - off ```\a -- "off 0.25" |+ "n 7" | etc ```

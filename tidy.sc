@@ -2,12 +2,17 @@
 //
 // - practice
 
+// "_" char inside synthdef name is still a problem
+
 // - seq should remember it's position in Library
 
-// - "drone f1 f2 f3 .."
-// - starts a BufRd with sinusoidal pos for each freq.
-//   the phase for the sinusoid (0..2pi) is random.
-//   all in one synthdef.
+// - gliding notes from one to the other
+
+// - idea: sample - reverse - add delays - reverse back
+
+// - idea: sample - reverse - reverb - resample - loop
+
+// - looper: start at frame 0, to frame y, return to frame x, to frame y, etc etc, at release, continue to last frame
 
 // - splice : -4 should play slice backwards
 
