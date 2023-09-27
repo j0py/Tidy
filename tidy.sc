@@ -1270,7 +1270,7 @@ JSTidyFX {
 			}
 			{
 				// the synthdef should have a sustaining envelope
-				// with \gate arg
+				// with \gate arg (and fadein/fadeout somewhat)
 				// the synthdef must use an \in and \out bus argument
 				// the synthdef may use the \gain argument
 				node = Synth(
@@ -1297,9 +1297,29 @@ JSTidyFX {
 		if(this != \tidy) { ^super.help };
 
 		"".postln;
-		"cheatsheet".postln;
+		"commands".postln;
 		"-------------------------------------------".postln;
 		"\\tidy .end(x) : fadeout + end in x seconds".postln;
+		"\\tidy .bpm(x) : set bpm to x beats per min".postln;
+		"\\tidy .quant(x) : set quantisation".postln;
+		"\\tidy .load(folder) : load samples".postln;
+		"\\tidy .loaded : post samples loaded".postln;
+		"\\tidy .rec(name, cycles, bus, nudge)".postln;
+		"\\tidy .save(name, folder) : saves it".postln;
+		"".postln;
+		"\\bus .fx { funct } .play(dest, gain, [])".postln;
+		"\\bus .fx(\synthdef) .play(dest, gain, [])".postln;
+		"\\bus -- { function } : create control bus".postln;
+		"\\bus .bus : return control bus object".postln;
+		"".postln;
+		"\\name -- \"func pattern\" .. : play notes".postln;
+		"\\name .hush(seconds) : fade out and stop".postln;
+		"".postln;
+		"seq,stack,chord,jux,rev,off,splice,every".postln;
+		"".postln;
+		"left: -, |>, |<, |*, |+, |/".postln;
+		"right: >|, <|, *|, +|, /|".postln;
+		"both: |>|, |<|, |*|, |+|, |/|".postln;
 		
 		^"".postln;
 	}
@@ -1314,8 +1334,6 @@ JSTidyFX {
 	
 	loaded { if(this == \tidy) { JSTidy.loaded } }
 	
-	scope { if(this == \tidy) { Server.default.scope.window.alwaysOnTop_(true) } }
-
 	fx { |in| ^JSTidyFX(this, in) }	// return object to the Interpreter
 	
 	-- { |in|
@@ -1411,5 +1429,3 @@ JSTidyFX {
 		};
 	}
 }
-
-
