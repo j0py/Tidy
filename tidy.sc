@@ -156,10 +156,11 @@ JSTidy {
 			frames = BufFrames.kr(bufnum);
 			rate = BufRateScale.kr(bufnum);
 			rate = rate * freq / (60.midicps);
-			secs_needed = (end - begin) * frames / SampleRate.ir;
+			//secs_needed = (end - begin) * frames / SampleRate.ir;
+			secs_needed = (end - begin) * frames /BufSampleRate.kr(bufnum);
 
 			secs = Select.kr(splice > 0, [max(secs, secs_needed), secs]);
-			rate = Select.kr(splice > 0, [rate, rate * secs_needed / secs]);
+			rate = Select.kr(splice > 0, [rate, rate * secs_needed /secs]);
 
 			line = Line.ar(0, 1, secs, doneAction:2);
 			hold = max(0, 1 - att - att);
@@ -167,7 +168,7 @@ JSTidy {
 			hold = hold / (att + hold + att);
 			env = IEnvGen.ar(Env([0,1,1,0],[att,hold,att],crv), line);
 
-			sig = PlayBuf.ar(2, bufnum, speed * rate, 1, begin * frames, 0, 2);
+			sig = PlayBuf.ar(2, bufnum, speed * rate, 1,begin *frames,0,2);
 			sig = sig * env;
 			//sig = vel.clip(0, 1) * sig;
 			sig = vel * sig;
@@ -188,7 +189,8 @@ JSTidy {
 			frames = BufFrames.kr(bufnum);
 			rate = BufRateScale.kr(bufnum);
 			rate = rate * freq / (60.midicps);
-			secs_needed = (end - begin) * frames / SampleRate.ir;
+			//secs_needed = (end - begin) * frames / SampleRate.ir;
+			secs_needed = (end - begin) * frames /BufSampleRate.kr(bufnum);
 
 			secs = Select.kr(splice > 0, [max(secs, secs_needed), secs]);
 			rate = Select.kr(splice > 0, [rate, rate * secs_needed / secs]);
@@ -1419,6 +1421,16 @@ JSTidyFX {
 			
 			"record finished".postln;
 		}).play;
+	}
+
+	save { |name, folder|
+		Library.at(\tidyrec, name.asSymbol) !? { |buffer|
+			var path;
+			folder = folder.standardizePath;
+			path = folder ++ "/" ++ name ++ ".wav";
+			"Writing %% to %".format("\\", name, path.quote).postln;
+			buffer.write(path, "wav");
+		};
 	}
 }
 
