@@ -1017,51 +1017,6 @@ JSTidyFP_Rev : JSTidyNode {
 	}
 }
 
-/*
-// ~a < "slice 8 1 2 3 4" | "splice 1" - ...
-JSTidyFP_Slice : JSTidyNode {
-	var <>count;
-
-	*new { |pattern|
-		var instance = super.new("slice");
-		var str = pattern.split($ );
-		instance.count = max(1, str.removeAt(0).asInteger);
-		pattern = str.join($ ).stripWhiteSpace;
-		if(pattern.size > 0, { instance.add(JSTidyPattern(pattern)) });
-		^instance;
-	}
-
-	become_cur_after_add { ^true }
-
-	// sets \begin and \end keys and chops step into slices
-	// the structure comes from the slice pattern
-	// so you look up what sample to play in the input cycle
-	// slice will adjust duration to play the whole slice (may overlap)
-	// param splice > 0 will adjust \rate instead @see \playbuf synthdef
-	get { |cycle, name|
-		var time, input = children.last.get(cycle, name); // branch
-		cycle = children.first.get(cycle, name); // holds structure
-
-		time = 0;
-		cycle.steps.do { |step|
-			var slice, step2 = input.at(time);
-
-			slice = (step.at(\str) ? 0).asInteger; // what slice to play
-			step.put(\str, nil);
-			step.put(\num, nil); // could use this for bufnum..
-			step2 !? { step.putAll(step2.dict) } // bufnum,degree,def etc
-			step.put(\begin, max(0, min(slice, count - 1)) / count);
-			step.put(\end, max(1, min(slice + 1, count)) / count);
-			step.put(\legato, 1); // in order for splice to work
-
-			time = time + step.delta;
-		};
-
-		^cycle;
-	}
-}
-*/
-
 JSTidyFP_Slice : JSTidyNode {
 	var <>count;
 
