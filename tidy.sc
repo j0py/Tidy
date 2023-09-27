@@ -2,6 +2,8 @@
 //
 // - practice
 
+// euclids inside <> do not seem to work
+
 // "_" char inside synthdef name is still a problem
 
 // - seq should remember it's position in Library
@@ -106,8 +108,14 @@ JSTidy {
 	}
 
 	*bpm { |bpm|
+		if(bpm.isNil) { ^(TempoClock.tempo * 60).postln };
 		TempoClock.tempo_(bpm/60);
 		("\\tempo -- { DC.kr(" ++ (bpm/60) ++ ") }").interpret;
+	}
+
+	*quant { |quant|
+		if(quant.isNil) { ^(Library.at(\tidy, \quant) ? 4).postln };
+		Library.put(\tidy, \quant, quant.asInteger)
 	}
 
 	// do: JSTidy.load("mysamples".resolveRelative);
@@ -150,8 +158,6 @@ JSTidy {
 		"".padLeft(width, "-").postln;
 		^"".postln;
 	}
-
-	*quant { |quant| Library.put(\tidy, \quant, quant.asInteger) }
 
 	add_playbuf_synthdefs {
 
@@ -1299,13 +1305,13 @@ JSTidyFX {
 		"".postln;
 		"commands".postln;
 		"-------------------------------------------".postln;
-		"\\tidy .end(x) : fadeout + end in x seconds".postln;
-		"\\tidy .bpm(x) : set bpm to x beats per min".postln;
-		"\\tidy .quant(x) : set quantisation".postln;
 		"\\tidy .load(folder) : load samples".postln;
 		"\\tidy .loaded : post samples loaded".postln;
+		"\\tidy .bpm(x) : set bpm to x beats per min".postln;
+		"\\tidy .quant(x) : set quantisation".postln;
 		"\\tidy .rec(name, cycles, bus, nudge)".postln;
 		"\\tidy .save(name, folder) : saves it".postln;
+		"\\tidy .end(x) : fadeout + end in x seconds".postln;
 		"".postln;
 		"\\bus .fx { funct } .play(dest, gain, [])".postln;
 		"\\bus .fx(\synthdef) .play(dest, gain, [])".postln;
@@ -1315,20 +1321,20 @@ JSTidyFX {
 		"\\name -- \"func pattern\" .. : play notes".postln;
 		"\\name .hush(seconds) : fade out and stop".postln;
 		"".postln;
-		"seq,stack,chord,jux,rev,off,splice,every".postln;
+		"seq,stack,chord,jux,rev,off,splice,every,play".postln;
 		"".postln;
-		"left: -, |>, |<, |*, |+, |/".postln;
-		"right: >|, <|, *|, +|, /|".postln;
-		"both: |>|, |<|, |*|, |+|, |/|".postln;
+		"left: -, |>, |<, |*, |+, |/, |%".postln;
+		"right: >|, <|, *|, +|, /|, %|".postln;
+		"both: |>|, |<|, |*|, |+|, |/|, |%|".postln;
 		
 		^"".postln;
 	}
 
 	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
 
-	bpm { |bpm=60| if(this == \tidy) { JSTidy.bpm(bpm) } }
+	bpm { |bpm| if(this == \tidy) { JSTidy.bpm(bpm) } }
 
-	quant { |quant=4| if(this == \tidy) { JSTidy.quant(quant) } }
+	quant { |quant| if(this == \tidy) { JSTidy.quant(quant) } }
 
 	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
 	

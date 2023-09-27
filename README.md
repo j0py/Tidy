@@ -28,7 +28,7 @@ s.boot // or a more robuust setup with a limiter in it..
 
 ## Video examples
 
-Quality of the videos will improve as i makemore of them. Trying to keep them lean and mean.
+Quality of the videos will improve as i make more of them. Trying to keep them lean and mean.
 
 - [tidy experiments 1: first rhythm and sound](https://youtu.be/M7O0CmNMQGI)
 - [tidy experiments 2: the rec and play function](https://youtu.be/IzgYc9P942E)
@@ -100,9 +100,9 @@ When adding Synths (effects as well as triggered notes) Tidy always uses "addToH
 
 AddToHead is a good default choice: all triggered notes will always be able to be processed by the fx Synths that exist for a longer time in the server, and thus always end up at the bottom of the stack of nodes.
 
-If you want the \room effect to write to the \out effect, then you must define the \out effect BEFORE the \room effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, i addeda fourth argument "target" to the .play method. If you supply a target, then addBefore will be used with that target. So if \out sits on top of \room, then re-add \room with target \out to correct the situation.
+If you want the \room effect to write to the \out effect, then you must define the \out effect BEFORE the \room effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, i added a fourth argument "target" to the .play method. If you supply a target, then addBefore will be used with that target. So if \out sits on top of \room, then re-add \room with target \out to correct the situation.
 
-When re-adding the \room effect, it is assumed that the synthdef has a "gate" argument, and en envelope that fades in and out by some amount of seconds. This way, the old \room synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible.
+When re-adding the \room effect, it is assumed that the synthdef has a "gate" argument, and an envelope that fades in and out by some amount of seconds. This way, the old \room synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible. This is convenient if you want to re-add an effect to change some parameters for it.
 
 ## Sequencing
 
@@ -143,7 +143,7 @@ Instead of the "-" operator, you can also use "|>", "|+", "|*", "|<", "|/", "|%"
 
 Triggered notes must be able to send their signal to one of the effect buses (or more than one).
 
-You can send some signal using ``` - "out 0.2 0.6 0.1"``` for example. "out" Should correspond with the name one of the effect buses. The pattern is a pattern of gains for the steps.
+You can send some signal using ``` - "out 0.2 0.6 0.1"``` for example. "out" Should correspond with the name of one of the effect buses. The pattern is a pattern of gains for the steps.
 
 For that to work, all triggered Synths will receive outx/gainx arguments:
 ```
