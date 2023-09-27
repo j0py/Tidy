@@ -108,9 +108,11 @@ JSTidy {
 	// do: JSTidy.load("mysamples".resolveRelative);
 	*load { |folder|
 		var s = Server.default;
+
 		folder = folder.standardizePath;
+		
 		Routine({
-			(folder.resolveRelative +/+ "*").pathMatch.do({ |bank|
+			(folder +/+ "*").pathMatch.do({ |bank|
 				var index = 0;
 				(bank +/+ "*.wav").pathMatch.do({ |file|
 					Library.put(
@@ -128,17 +130,17 @@ JSTidy {
 			JSTidy.loaded;
 		}).play;
 	}
-	
+
 	*loaded { |width=40|
 		var len=width;
 		"".padLeft(width, "-").postln;
-		Library.at(\samples).keys.asArray.sort.do { |k|
+		Library.at(\samples).keys.asArray.sort.do({ |k|
 			var val = Library.at(\samples, k.asSymbol);
 			var str = "% % - ".format(k, val.size);
 			if((len - (str.size)) < 0) { "".postln; len=width };
 			len = len - (str.size);
 			str.post;
-		};
+		});
 		"".postln;
 		"".padLeft(width, "-").postln;
 		^"".postln;
@@ -295,7 +297,7 @@ JSTidy {
 	}
 
 	-- { |array|
-		array.do { |tidytree| cur.add(tidytree.tree) };
+		array.do { |jstidy| cur.add(jstidy.tree) };
 		cur = cur.parent;
 	}
 	
@@ -818,12 +820,27 @@ JSTidyPattern : JSTidyNode {
 
 // play sub-sequences
 JSTidyFP_Seq : JSTidyNode {
-	var seq; // a queue of steps
+	var <>pattern;
+	
+	*new { |pattern|
+		var instance = super.new("seq");
+		instance.pattern_(pattern);
+		instance.add(JSTidyPattern(pattern));
+		^instance;
+	}
 
-	*new { |pattern| ^super.new("seq").add(JSTidyPattern(pattern)) }
+	become_cur_after_add { ^true }
 
 	get { |cycle, name|
 		var index;
+		var seq; // a queue of steps
+
+		seq = Library.at(\tidyseq, name.asSymbol, \seq);
+		
+		Library.at(\tidyseq, name.asSymbol, \pattern) !? { |pat|
+			if(pat != pattern) { seq = nil };
+		};
+		Library.put(\tidyseq, name.asSymbol, \pattern, pattern);
 
 		// keep a queue of steps of the sequence
 		seq ?? { seq = List.new };
@@ -836,10 +853,11 @@ JSTidyFP_Seq : JSTidyNode {
 		// dur/delta of the steps is ignored. we use 1 step for each cycle.
 		index = seq.removeAt(0).at(\str).asInteger;
 		index = index % (children.size - 1) + 1;
+
+		Library.put(\tidyseq, name.asSymbol, \seq, seq);
+		
 		^children.at(index).get(cycle, name);
 	}
-
-	become_cur_after_add { ^true }
 }
 
 // mix-play sub-sequences
