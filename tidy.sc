@@ -310,10 +310,17 @@ JSTidy {
 	}
 
 	-- { |array|
+		var cur_is_branch;
+		
 		array.do { |jstidy| cur.add(jstidy.tree) };
-		cur = cur.parent;
+
+		// cur is a Seq or a Stack, cur must be closest parent branch
+		while { cur.parent.notNil.and(cur.is_branch.not) } {
+			"cur2 %".format(cur).postln;
+			cur = cur.parent;
+		};
 	}
-	
+
 	// returns a JSTidyXX function. str format: "<function name> <pattern>"
 	// a JSTidyXX function takes a cycle, maybe alters it, and returns it.
 	func { |str|
@@ -334,7 +341,13 @@ JSTidy {
 		tree ?? { tree = cur = JSTidyBranch("tree") };
 		cur.add(obj);
 		obj.parent = cur;
-		if(obj.become_cur_after_add) { cur = obj };
+		if(obj.become_cur_after_add) {
+			cur = obj
+		} {
+			obj.children.do { |child|
+				if(child.become_cur_after_add) { cur = child }
+			}
+		}
 	}
 
 	// create a JSTidy function and add it to the tree
@@ -640,7 +653,10 @@ JSTidyNode {
 
 	*new { |val| ^super.newCopyArgs([], val.asString) }
 
-	add { |child| children = children.add(child) }
+	add { |child|
+		children = children.add(child);
+		child.parent = this; // @see JSTidy -- operator
+	}
 
 	log { |indent=""|
 		"%% %".format(indent, this.class, (val ? "").quote).postln;
@@ -692,15 +708,25 @@ JSTidyBranch : JSTidyNode {
 	is_branch { ^true }
 }
 
+
+/*
 JSTidyComb : JSTidyNode {
 	// combine 2 steps, third param is where structure should come from.
 	combine { |step, stepAt, right|
 		stepAt.dict.keysValuesDo { |key, value|
 			case
 			{ val == ">" }
-			{ step.put(key, value) }
+			{
+				if(right.isNil) {
+					step.put(key, value)
+				}
+			}
 			{ val == "<" }
-			{ step.at(key) ?? { step.put(key, value) }}
+			{
+				if(right.notNil) {
+					step.put(key, value)
+				}
+			}
 			{ val == "+" }
 			{ step.put(key, (step.at(key) ? 0) + value) }
 			{ val == "*" }
@@ -734,7 +760,6 @@ JSTidyComb : JSTidyNode {
 		};
 	}
 }
-
 JSTidyCombLeft : JSTidyComb {
 	get { |cycle, name|
 		var time, child = children.first.get(cycle, name);
@@ -745,10 +770,9 @@ JSTidyCombLeft : JSTidyComb {
 			time = time + step.delta;
 		};
 
-		^cycle;
+		^cycle.postln;
 	}
 }
-
 JSTidyCombRight : JSTidyComb {
 	get { |cycle, name|
 		var time, child = children.first.get(cycle, name);
@@ -759,11 +783,108 @@ JSTidyCombRight : JSTidyComb {
 			time = time + step.delta;
 		};
 
+		^child.postln;
+	}
+}
+
+*/
+
+// (cycle) |> (child), (/+*%<>)
+//
+JSTidyCombLeft : JSTidyNode {
+	get { |cycle, name|
+		var time, child = children.first.get(cycle, name);
+
+		time = 0;
+		cycle.steps.do { |step|
+			var other, keys;
+
+			other = child.at(time);
+
+			// collect all keys from both sides
+			keys = step.dict.keys;
+			other.dict.keys.do { |key| keys.add(key) };
+			
+			// combine the values for the keys
+			keys.do { |key|
+				case
+				{ val == ">" }
+				{ step.put(key, other.at(key) ? step.at(key)) }
+				{ val == "<" }
+				{ step.put(key, step.at(key) ? other.at(key)) }
+				{ val == "+" }
+				{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
+				{ val == "*" }
+				{ step.put(key, (step.at(key) ? 1) * (other.at(key) ? 1)) }
+				{ val == "/" }
+				{
+					var value = (other.at(key) ? 0);
+					if(value == 0) {
+						step.put(key, 0) // division by zero
+					} {
+						step.put(key, (step.at(key) ? 0) / value)
+					};
+				}
+				{ val == "%" }
+				{ step.put(key, (step.at(key) ? 0) % (other.at(key) ? 0)) }
+				{ }
+			};
+			
+			time = time + step.delta;
+		};
+
+		^cycle;
+	}
+}
+
+// (cycle) >| (child), (/+*%<>)
+//
+JSTidyCombRight : JSTidyNode {
+	get { |cycle, name|
+		var time, child = children.first.get(cycle, name);
+
+		time = 0;
+		child.steps.do { |step|
+			var other, keys;
+
+			other = cycle.at(time);
+
+			// collect all keys from both sides
+			keys = step.dict.keys;
+			other.dict.keys.do { |key| keys.add(key) };
+			
+			keys.do { |key|
+				case
+				{ val == ">" }
+				{ step.put(key, step.at(key) ? other.at(key)) }
+				{ val == "<" }
+				{ step.put(key, other.at(key) ? step.at(key)) }
+				{ val == "+" }
+				{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
+				{ val == "*" }
+				{ step.put(key, (step.at(key) ? 1) * (other.at(key) ? 1)) }
+				{ val == "/" }
+				{
+					var value = (step.at(key) ? 0);
+					if(value == 0) {
+						step.put(key, 0) // division by zero
+					} {
+						step.put(key, (other.at(key) ? 0) / value)
+					};
+				}
+				{ val == "%" }
+				{ step.put(key, (other.at(key) ? 0) % (step.at(key) ? 0)) }
+				{ }
+			};
+
+			time = time + step.delta;
+		};
+
 		^child;
 	}
 }
 
-JSTidyCombBoth : JSTidyComb {
+JSTidyCombBoth : JSTidyNode {
 	get { |cycle, name|
 		^cycle.steps_(
 			this.make_steps(
@@ -819,6 +940,54 @@ JSTidyCombBoth : JSTidyComb {
 		};
 
 		^steps;
+	}
+
+	combine { |step, stepAt, right|
+		stepAt.dict.keysValuesDo { |key, value|
+			case
+			{ val == ">" }
+			{
+				if(right.isNil) {
+					step.put(key, value)
+				}
+			}
+			{ val == "<" }
+			{
+				if(right.notNil) {
+					step.put(key, value)
+				}
+			}
+			{ val == "+" }
+			{ step.put(key, (step.at(key) ? 0) + value) }
+			{ val == "*" }
+			{ step.put(key, (step.at(key) ? 1) * value) }
+			{ val == "/" }
+			{
+				if(right.isNil, {
+					if(value == 0, {
+						step.put(key, 0) // division by zero
+					}, {
+						step.put(key, (step.at(key) ? 0) / value)
+					});
+				},{
+					var divider = (step.at(key) ? 0);
+					if(divider == 0, {
+						step.put(key, 0) // division by zero
+					}, {
+						step.put(key, value / divider)
+					});
+				})
+			}
+			{ val == "%" }
+			{
+				if(right.isNil, {
+					step.put(key, (step.at(key) ? 0) % value)
+				}, {
+					step.put(key, value % (step.at(key) ? 0))
+				})
+			}
+			{ }
+		};
 	}
 }
 
