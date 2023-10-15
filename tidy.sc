@@ -109,6 +109,7 @@ JSTidy {
 
 	*bpm { |bpm|
 		if(bpm.isNil) { ^(TempoClock.tempo * 60).postln };
+
 		TempoClock.tempo_(bpm/60);
 		("\\tempo -- { DC.kr(" ++ (bpm/60) ++ ") }").interpret;
 	}
