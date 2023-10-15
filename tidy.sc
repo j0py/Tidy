@@ -183,17 +183,17 @@ JSTidy {
 	add_playbuf_synthdefs {
 
 		SynthDef(\playbuf_stereo, {
-			arg freq=440, secs=0, begin=0, end=1, speed=1, pan=0,
+			arg secs=0, glide=0, begin=0, end=1, speed=1, pan=0,
 			vel=0.5, att=0.02, crv=(-4), bufnum, splice=0;
-			var line, env, hold, rate, frames, sig, secs_needed;
+			var line, freq, env, hold, rate, frames, sig, secs_needed;
 
 			frames = BufFrames.kr(bufnum);
-			rate = BufRateScale.kr(bufnum);
-			rate = rate * freq / (60.midicps);
-			//secs_needed = (end - begin) * frames / SampleRate.ir;
 			secs_needed = (end - begin) * frames /BufSampleRate.kr(bufnum);
 
 			secs = Select.kr(splice > 0, [max(secs, secs_needed), secs]);
+			freq = \freq.kr(440, secs_needed * glide);
+			rate = BufRateScale.kr(bufnum);
+			rate = rate * freq / (60.midicps);
 			rate = Select.kr(splice > 0, [rate, rate * secs_needed /secs]);
 
 			line = Line.ar(0, 1, secs, doneAction:2);
@@ -340,7 +340,7 @@ JSTidy {
 
 		// cur is a Seq or a Stack, cur must be closest parent branch
 		while { cur.parent.notNil.and(cur.is_branch.not) } {
-			"cur2 %".format(cur).postln;
+			//"cur2 %".format(cur).postln;
 			cur = cur.parent;
 		};
 	}
@@ -492,8 +492,14 @@ JSTidyStep {
 	play { |name, gain=1|
 		var instr, def, sustain, rootfreq;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
+
+		// give degrade functions a chance to clear the trigger
+		if(trig > 0) {
+			dict.at(\degrade) !? { dict.put(\degradeBy, 0.5) };
+			trig = (dict.at(\degradeBy) ? 1).coin.asInteger;
+		};
 		
-		// it will be audio
+		// there will be audio
 		if(trig > 0) {
 			this.at(\snd) !? { |bank|
 				var index = (this.at(\buf) ? 0).asInteger;
@@ -1276,6 +1282,7 @@ JSTidyFP : JSTidyNode {
 		];
 		var instance = super.new(abbr.asDict.at(val.asSymbol) ? val);
 		if(val == "log") { pattern = "1" };
+		if(val == "degrade") { pattern = "1" };
 		if(pattern.size > 0, { instance.add(JSTidyPattern(pattern)) });
 		^instance;
 	}
@@ -1315,6 +1322,7 @@ JSTidyFP : JSTidyNode {
 	get { |cycle, name|
 		// return a cycle with value from your pattern filled in for val
 		cycle = children.first.get(cycle, name);
+
 		cycle.steps.do { |step|
 			step.at(\str) !? { |str|
 				if(str[0] == $=) {
