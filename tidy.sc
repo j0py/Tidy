@@ -197,7 +197,8 @@ JSTidy {
 			rate = Select.kr(splice > 0, [rate, rate * secs_needed /secs]);
 
 			line = Line.ar(0, 1, secs, doneAction:2);
-			env = IEnvGen.ar(Env.asr(att,1,att,crv).duration_(1), line);
+			//env = IEnvGen.ar(Env.asr(att,1,att,crv).duration_(1), line);
+			env = IEnvGen.ar(Env([0,1,1,0],[att,1,att],crv).duration_(1), line);
 
 			//line = Line.ar(0, 1, secs, doneAction:2);
 			//hold = max(0, 1 - att - att);
