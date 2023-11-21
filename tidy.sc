@@ -2,6 +2,7 @@
 2023-11-18
 practice (out loud)
 load only good samples
+CmdPeriod behaviour
 euclids inside <> do not seem to work (but maybe illogical to want)
 idea: sample - reverse - add delays - reverse back
 idea: sample - reverse - reverb - resample - loop
@@ -21,7 +22,6 @@ idea: "life 0.6" : brings in small random variations (wow:flutter) am/fm, like v
 idea: "seed 1234" : control randomness
 idea: "trig 1000100101" or "hex 7fa4" to generate/override structure
 mini notation parser more robust: monitor the index through recursive looping
-\tidy .setup(<bpm>, <samples folder>) and also establish \out fx
 mini-notation "b [0|1|2|3|~]" could be "b [0 1 2 3 ~]??" ("pick one of them randomly")
 startrek samples, cars you recorded in stereo
 make vital classic bend VOsc wavetables: sine - tri - saw - pulse - pulsew
@@ -79,6 +79,65 @@ JSTidy {
 
 	*new { |name| ^super.new.name_(name) }
 
+	*add_internal_synthdefs {
+
+		Library.at(\tidy, \internal_synthdefs_added) !? { ^this };
+
+		SynthDef(\fader, {
+			var bus, val, target, fadetime;
+			target = \target.kr(0);
+			bus = \bus.kr(0);
+			val = In.kr(bus, 1);
+			val = Env([val, val, target], [0, \fadetime.kr(0)]).kr(0, \trig.tr(0));
+			ReplaceOut.kr(bus, val);
+		}).add;
+
+		SynthDef(\playbuf_s, {
+			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
+			var gate = \gate.kr(1);
+			var rate = \rate.kr(1) * freq / 60.midicps;
+			var bufnum = \bufnum.kr(0);
+			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			var att = \att.kr(0.02);
+			var rel = \rel.kr(0.02);
+			var sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
+			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
+			sig = LeakDC.ar(sig);
+			// maybe use Balance2 ?
+			sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
+
+			sig = sig * \gain.kr(1) * \fader.kr(1);
+
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
+		}).add;
+
+		SynthDef(\playbuf_m, {
+			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
+			var gate = \gate.kr(1);
+			var rate = \rate.kr(1) * freq / 60.midicps;
+			var bufnum = \bufnum.kr(0);
+			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			var att = \att.kr(0.02);
+			var rel = \rel.kr(0.02);
+			var sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
+			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
+			sig = LeakDC.ar(sig);
+			sig = Pan2.ar(sig, \pan.kr(0), \vel.kr(0.5));
+
+			sig = sig * \gain.kr(1) * \fader.kr(1);
+
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
+		}).add;
+
+		Library.put(\tidy, \internal_synthdefs_added, true);
+	}
+	
 	// func receives the step dictionary as parameter
 	*addpostprocessor { |func|
 		postprocessors = postprocessors ? List.new;
@@ -106,7 +165,7 @@ JSTidy {
 
 		Library.at(\tidykr) !? { |dict|
 			Routine({
-				seconds.wait;
+				(seconds * TempoClock.tempo).wait;
 				dict.keys.do { |name|
 					Library.at(\tidykr, name, \synth) !? { |synth|
 						synth.release
@@ -120,7 +179,7 @@ JSTidy {
 	*hush { |name, seconds=1|
 		Routine({
 			// stop the routine
-			var beats = max(0.2, seconds) / thisThread.clock.tempo;
+			var beats = max(0.2, seconds) * TempoClock.tempo;
 			Library.put(\tidyar, name, \fade, beats);
 			beats.wait;
 			Library.at(\tidyar, name, \routine) !? { |routine|
@@ -132,24 +191,34 @@ JSTidy {
 		}).play;
 	}
 
+	// bpm = quavers per minute.. one cycle seems to have 4 quavers in it..
 	*bpm { |bpm|
-		if(bpm.isNil) { ^(TempoClock.tempo * 60 * 4).postln };
+		var bpb = 4;
+		
+		if(bpm.isNil) { ^(TempoClock.tempo * 60 * bpb).postln };
 
-		TempoClock.tempo_(bpm/60/4);
-		("\\tempo -- { DC.kr(" ++ (bpm/60/4) ++ ") }").interpret;
+		TempoClock.tempo_(bpm/60/bpb); // cycles per second
+		("\\tempo -- { DC.kr(" ++ (bpm/60/bpb) ++ ") }").interpret;
 	}
 
+	// quant is in cycles (= 1 TempoClock beat)
 	*quant { |quant|
-		if(quant.isNil) { ^(Library.at(\tidy, \quant) ? 4).postln };
+		if(quant.isNil) { ^(Library.at(\tidy, \quant) ? 1) };
 		Library.put(\tidy, \quant, quant.asInteger)
 	}
 
-	*load { |folder|
-		var s = Server.default;
+	*quantize {
+		var now, quant;
+		now = thisThread.beats;
+		quant = JSTidy.quant;
+		((now + quant).div(quant) * quant - now).wait;
+	}
 
-		folder = folder.standardizePath;
-		
-		Routine({
+	*load { |folder|
+
+		var f = {
+			var s = Server.default;
+			folder = folder.standardizePath;
 			(folder +/+ "*").pathMatch.do({ |bank|
 				var index = 0;
 				(bank +/+ "*.wav").pathMatch.do({ |file|
@@ -166,7 +235,9 @@ JSTidy {
 			s.sync;
 			"Loaded %".format(folder.quote).postln;
 			JSTidy.loaded;
-		}).play;
+		};
+		
+		if(thisProcess.mainThread == thisThread) { Routine(f).play } { f.value };
 	}
 
 	*loaded { |width=40|
@@ -187,48 +258,6 @@ JSTidy {
 		"".padLeft(width, "-").postln;
 		^"".postln;
 	}
-
-	add_playbuf_synthdefs {
-
-		SynthDef(\playbuf_s, {
-			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
-			var gate = \gate.kr(1);
-			var rate = \rate.kr(1) * freq / 60.midicps;
-			var bufnum = \bufnum.kr(0);
-			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			var att = \att.kr(0.02);
-			var rel = \rel.kr(0.02);
-			var sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
-			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
-			sig = LeakDC.ar(sig);
-			// maybe use Balance2 ?
-			sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
-
-			Out.ar(\out1.kr(0), sig * \gain1.kr(0) * \gain.kr(1));
-			Out.ar(\out2.kr(0), sig * \gain2.kr(0) * \gain.kr(1));
-			Out.ar(\out3.kr(0), sig * \gain3.kr(0) * \gain.kr(1));
-			Out.ar(\out4.kr(0), sig * \gain4.kr(0) * \gain.kr(1));
-		}).add;
-
-		SynthDef(\playbuf_m, {
-			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
-			var gate = \gate.kr(1);
-			var rate = \rate.kr(1) * freq / 60.midicps;
-			var bufnum = \bufnum.kr(0);
-			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			var att = \att.kr(0.02);
-			var rel = \rel.kr(0.02);
-			var sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
-			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
-			sig = LeakDC.ar(sig);
-			sig = Pan2.ar(sig, \pan.kr(0), \vel.kr(0.5));
-
-			Out.ar(\out1.kr(0), sig * \gain1.kr(0) * \gain.kr(1));
-			Out.ar(\out2.kr(0), sig * \gain2.kr(0) * \gain.kr(1));
-			Out.ar(\out3.kr(0), sig * \gain3.kr(0) * \gain.kr(1));
-			Out.ar(\out4.kr(0), sig * \gain4.kr(0) * \gain.kr(1));
-		}).add;
-	}
 	
 	printOn { |stream|
 		// if tree is nil then something has gone wrong during the
@@ -245,15 +274,15 @@ JSTidy {
 		// evaluate some code twice within one quantisation period!
 		Library.at(\tidyar, name, \evaluated) ?? { 
 
-			// a logical cycle lasts 1 beat in my system, quant is in beats
+			// a logical cycle lasts 1 TempoClock beat, quant is in cycles
 			Library.put(\tidyar, name, \evaluated, Routine({
 				var quant, nudge=0.001, now, wait;
 
-				this.add_playbuf_synthdefs;
-				Server.default.sync; // this might take some time
+				//JSTidy.add_synthdefs;
+				//Server.default.sync; // this might take some time
 				
 				now = thisThread.beats; // so do quantisation now
-				quant = (Library.at(\tidy, \quant) ? 4).asInteger;
+				quant = JSTidy.quant;
 
 				// stop the old routine <nudge> before starting the new one.
 				// nudge=0 : old routine triggers one more note, while the
@@ -288,8 +317,6 @@ JSTidy {
 							fadebeats = beats;
 						};
 
-						// todo: "glide": needs to be done a different way somehow..
-						// todo: "swing": translate stop/start times through an Env
 						cycle.steps.do({ |step|
 							var slow;
 							if(fading) { gain = faded.linexp(0,fadebeats,1,0.001) };
@@ -481,13 +508,16 @@ JSTidyStep {
 
 	// always using gate, synthdef will receive sustain param (in seconds)
 	play { |name, gain=1|
-		var def, sustain, buf;
+		var def, sustain, buf, bpb=4;
 		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
 		var rate = (dict.at(\rate) ? 1);
 
-		// calculate sustain
+		this.move_fader(name);
+		this.set_solo(name);
+		
+		// calculate sustain (in seconds)
 		dict.at(\legato) ?? { dict.put(\legato, 0.8) }; // if glide default should be 1
-		sustain = dict.at(\legato) * dur / TempoClock.tempo / 4;
+		sustain = dict.at(\legato) * dur / TempoClock.tempo / bpb;
 		sustain = sustain * (dict.at(\slow) ? 1) / (dict.at(\fast) ? 1);
 		
 		// give degrade function a chance to clear the trigger
@@ -583,7 +613,7 @@ JSTidyStep {
 			var synth;
 			
 			// micro-timing: laid-back snaredrum
-			((dict.at(\late) ? 0).clip(0, 20) / 1000).wait;
+			dict.at(\late) !? { |ms| (ms.clip(0, 20) / 1000 * TempoClock.tempo).wait };
 			
 			// play note
 			JSTidy.postprocessors.do { |p| p.(dict) };
@@ -592,10 +622,76 @@ JSTidyStep {
 
 			// end note
 			if(def.hasGate) {
-				sustain.wait;
+				(sustain * TempoClock.tempo).wait;
 				Server.default.bind { synth.set(\gate, 0) };
 			};
 		}).play;
+	}
+
+	set_solo { |name|
+		// we need a solo/unsolo bus just like with move_fader because:
+		// - a running synth must hush if another orbit goes solo
+		// - after the solo, the running synth must return to its fader setting
+		// solo must not move the fader
+		// all synths will have arg \solo.kr(1), so they assume that they are
+		// 
+	}
+	
+	move_fader { |name|
+		var bus;
+		
+		(bus = Library.at(\tidyar, name, \faderbus)) ?? {
+			Library.put(\tidyar, name, \faderbus, (bus = Bus.control));
+			dict.at(\fadein) ?? { bus.setSynchronous(1) };
+		};
+
+		/*
+		dict.at(\fadein) !? { |seconds|
+			Routine({
+				var val, local;
+
+				Library.global.removeAt(\tidyar, name, \fadersynth) !? { _.free };
+				val = bus.getSynchronous;
+				
+				if((seconds = val.linlin(0, 1, seconds, 0)) > 0) {
+					Library.put(\tidyar, name, \fadersynth, (local = {
+						Line.kr(val, 1, seconds)
+					}.play(Server.default, bus)));
+					Server.default.sync;
+					(thisThread.clock.tempo * seconds).wait;
+					if(local == Library.at(\tidyar, name, \fadersynth)) {
+						Library.global.removeAt(\tidyar, name, \fadersynth);
+						local.free;
+						bus.setSynchronous(1);
+					};
+				};
+			}).play;
+		};
+		
+		dict.at(\fadeout) !? { |seconds|
+			Routine({
+				var val, local;
+
+				Library.global.removeAt(\tidyar, name, \fadersynth) !? { _.free };
+				val = bus.getSynchronous;
+
+				if((seconds = val.linlin(1, 0, seconds, 0)) > 0) {
+					Library.put(\tidyar, name, \fadersynth, (local = {
+						Line.kr(val, 0, seconds)
+					}.play(Server.default, bus)));
+					Server.default.sync;
+					(thisThread.clock.tempo * seconds).wait;
+					if(local == Library.at(\tidyar, name, \fadersynth)) {
+						Library.global.removeAt(\tidyar, name, \fadersynth);
+						local.free;
+						bus.setSynchronous(0);
+					};
+				};
+			}).play;
+		};
+		*/
+		
+		dict.put(\fader, bus.asMap);
 	}
 	
 	put_sends {
@@ -648,7 +744,7 @@ JSTidyStep {
 		stream << "\n";
 	}
 
-	// ??
+	// called by JSTidyCycle.printOn
 	printOn2 { |stream|
 		stream << "step % % %".format(
 			trig,
@@ -657,7 +753,6 @@ JSTidyStep {
 		);
 
 		dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
-		//outs.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
 		stream << "\n";
 	}
 }
@@ -1223,6 +1318,12 @@ JSTidyFP : JSTidyNode {
 		if(val == "crop" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "grow" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "shrink" and: (pattern.size <= 0)) { pattern = "1" };
+
+		if(val == "fadein" or: (val == "fadeout")) {
+			if(pattern.size <= 0) { pattern = "1" };
+			pattern = pattern.split($ ).first; // interpreted as float later
+		};
+
 		if(pattern.size > 0) { instance.add(JSTidyPattern(pattern)) };
 		^instance;
 	}
@@ -1323,19 +1424,20 @@ JSTidyFX {
 	}
 
 	play { |out=0, gain=0, args, target|
-		var in, node, old, addAction;
+		var in, node, old, addAction, server;
 
+		server = Server.default;
 		gain = gain.asFloat.clip(0, 1);
 		args = args ? [];
 		
 		Routine({
 			// create audio input bus for the effect
 			(in = Library.at(\tidyar, name.asSymbol, \bus)) ?? {
-				in = Bus.audio(Server.default, 2);
+				in = Bus.audio(server, 2);
 				Library.put(\tidyar, name.asSymbol, \bus, in);
 			};
 
-			Server.default.sync;
+			server.sync;
 
 			case
 			{ out.isInteger } { out = out.asInteger }
@@ -1399,7 +1501,7 @@ JSTidyFX {
 			
 			old !? { old.release };
 			
-			Server.default.sync;
+			server.sync;
 
 			Library.put(\tidyar, name.asSymbol, \synth, node);
 		}).play;
@@ -1422,7 +1524,7 @@ JSTidyFX {
 		"\\tidy .rec(name, cycles, bus, nudge)".postln;
 		"\\tidy .save(name, folder) : saves it".postln;
 		"\\tidy .end(x) : fadeout + end in x seconds".postln;
-		"\\tidy .setup : invokes ~/setup.scd".postln;
+		"\\tidy .setup(bpm, samplespath) : ~/setup.scd".postln;
 		"\\tidy .show(\\tree | \\cycle | \\step)".postln;
 		"".postln;
 		"\\bus .fx { funct } .play(dest, gain, [])".postln;
@@ -1442,10 +1544,61 @@ JSTidyFX {
 		^"".postln;
 	}
 
-	setup { if(this == \tidy) {
-		"~/setup.scd".standardizePath.load;
-		JSTidy.bpm(60);
-	} }
+	setup { |bpm=60, samples, scd|
+		if(this == \tidy) {
+			var s = Server.default;
+
+			s.options.memSize = 2 ** 20;
+			s.options.numBuffers = 2048;
+			s.newBufferAllocators;
+			s.newBusAllocators;
+
+			s.waitForBoot({
+				var channels = s.options.numOutputBusChannels;
+
+				/* Guard (you may re-execute this part anytime) */
+				SynthDef(\guard, {
+					var in = In.ar(0, channels), zero = DC.ar(0);
+					in = LeakDC.ar(in);
+					in = Select.ar(CheckBadValues.ar(in,0,0), [in,zero,zero,in]);
+					in = Limiter.ar(in);
+					ReplaceOut.ar(0, in);
+				}).add;
+
+				s.sync;
+
+				// SynthDefs and Library survive CmdPeriod, synths do not
+				if(Library.at(\guard).isNil, {
+					Library.put(\guard, {
+						Synth(\guard, [], RootNode(s), \addToTail);
+						s.sync;
+						s.queryAllNodes;
+					});
+					CmdPeriod.add({ Routine { Library.at(\guard).value }.play; });
+					Library.at(\guard).value;
+				});
+
+				s.sync;
+
+				JSTidy.add_internal_synthdefs;
+				JSTidy.bpm(bpm);
+
+				samples !? { JSTidy.load(samples) };
+
+				s.sync;
+
+				"*** Tidy setup complete ***\n".postln;
+				
+				scd !? { |file|
+					file = file.standardizePath;
+					"Loading %".format(file.quote).postln;
+					file.load;
+				};
+
+				s.sync;
+			});
+		}
+	}
 	
 	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
 
@@ -1465,23 +1618,23 @@ JSTidyFX {
 		case
 		{ in.isFunction }
 		{
-			var bus, node;
+			var bus, node, server = Server.default;
 
 			Routine({
 				// create control bus
 				(bus = Library.at(\tidykr, this, \bus)) ?? {
-					bus = Bus.control(Server.default, 1);
+					bus = Bus.control(server, 1);
 					Library.put(\tidykr, this, \bus, bus);
 				};
 
 				node = Library.at(\tidykr, this, \synth);
 
-				Server.default.bind {
+				server.bind {
 					node !? { node.release };
 					node = in.play(nil, bus.index);
 				};
 
-				Server.default.sync;
+				server.sync;
 
 				Library.put(\tidykr, this, \synth, node);
 			}).play;
@@ -1499,46 +1652,40 @@ JSTidyFX {
 
 	bus { ^Library.at(\tidykr, this, \bus) }
 
-	rec { |name, beats, bus, nudge=(-0.25)|
+	rec { |name, cycles, bus, nudge=(-0.25)|
 		if(this != \tidy) { ^super.rec };
 		
 		Routine({
-			var sec, buf, old;
-			var now, quant, wait;
+			var seconds, buf, old, now, quant, bpb=4;
+			var server = Server.default;
 
-			sec = beats / thisThread.clock.tempo;
-			"rec % beats".format(beats).postln;
-
-			buf = Buffer.alloc(
-				Server.default,
-				sec * Server.default.sampleRate,
-				2);
-
-			Server.default.sync;
-
+			SynthDef(\rec, {
+				var bufnum = \buf.kr(0);
+				var in = In.ar(\in.kr(0), 2);
+				RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
+			}).add;
+			server.sync;
+			
+			seconds = cycles / TempoClock.tempo; // 1 cycle = 1 TempoClock beat
+			"rec % cycles (% seconds)".format(cycles, seconds).postln;
+			buf = Buffer.alloc(server, seconds * server.sampleRate, 2);
+			server.sync;
 			"rec bufnum %".format(buf.bufnum).postln;
 
-			// calculate how long to wait for quant point
-			now = thisThread.beats;
-			quant = (Library.at(\tidy, \quant) ? 4);
-			quant = quant.asInteger;
-			wait = (now + quant).div(quant) * quant - now;
-			wait.wait;
-
-			Server.default.makeBundle(quant - nudge, {
+			JSTidy.quantize;
+			
+			// start \rec synth 1 cycle from now + start countdown now
+			server.makeBundle(1 / TempoClock.tempo - nudge, {
 				Synth(\rec, [buf: buf, in: bus], nil, \addToTail);
 			});
 
-			// countdown in post window
-			quant.do { |i|
-				"..%".format(quant - i).postln;
-				1.wait;
-			};
-			"..0!".postln;
+			bpb.do { |i| "..%".format(4 - i).postln; (1/bpb).wait };
+			"..go!".postln;
 			
-			// count up in post window (re-using wait variable)
-			beats.do { |i| "--%".format(i+1).postln; 1.wait; };
+			// countup in post window during \rec synth lifetime
+			(cycles * bpb).do { |i| "--%".format(i+1).postln; (1/bpb).wait; };
 
+			// store the new recording; free old one if any
 			old = Library.at(\tidyrec, name.asSymbol);
 			Library.put(\tidyrec, name.asSymbol, buf);
 			old !? { |b| b.free };
