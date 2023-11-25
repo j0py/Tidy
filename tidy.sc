@@ -95,7 +95,7 @@ JSTidy {
 		SynthDef(\playbuf_s, {
 			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
 			var gate = \gate.kr(1);
-			var rate = \rate.kr(1) * freq / 60.midicps;
+			var rate = \rate.kr(1); // * freq / 60.midicps;
 			var bufnum = \bufnum.kr(0);
 			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
 			var att = \att.kr(0.02);
@@ -117,7 +117,7 @@ JSTidy {
 		SynthDef(\playbuf_m, {
 			var freq = \freq.kr(60.midicps, \freqlag.kr(0));
 			var gate = \gate.kr(1);
-			var rate = \rate.kr(1) * freq / 60.midicps;
+			var rate = \rate.kr(1); // * freq / 60.midicps;
 			var bufnum = \bufnum.kr(0);
 			var begin = \begin.kr(0) * BufFrames.kr(bufnum);
 			var att = \att.kr(0.02);
@@ -186,21 +186,24 @@ JSTidy {
 				Library.put(\tidyar, name, \routine, nil);
 				routine.stop
 			};
+			Library.put(\tidyar, name, \fade, nil);
 			
 			"hushed %".format(name).postln;
 		}).play;
 	}
 
-	// bpm = quavers per minute.. one cycle seems to have 4 quavers in it..
-	*bpm { |bpm|
-		var bpb = 4;
-		
-		if(bpm.isNil) { ^(TempoClock.tempo * 60 * bpb).postln };
-
-		TempoClock.tempo_(bpm/60/bpb); // cycles per second
-		("\\tempo -- { DC.kr(" ++ (bpm/60/bpb) ++ ") }").interpret;
+	// cycles per second
+	*cps { |cps|
+		if(cps.isNil) {
+			var cps = TempoClock.tempo;
+			"tempo: % cps (% bpm)".format(cps, cps * 4 * 60).postln;
+			^cps;
+		} {
+			TempoClock.tempo_(cps);
+			("\\tempo -- { DC.kr(" ++ (cps) ++ ") }").interpret;
+		}
 	}
-
+	
 	// quant is in cycles (= 1 TempoClock beat)
 	*quant { |quant|
 		if(quant.isNil) { ^(Library.at(\tidy, \quant) ? 1) };
@@ -506,28 +509,233 @@ JSTidyStep {
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
-	// always using gate, synthdef will receive sustain param (in seconds)
+	/*
+		about timing and tempo:
+		-----------------------
+		1 cycle == 1 TempoClock beat == 1 bar
+		the total "delta" of all steps in a cycle = 1 TempoClock beat
+		the "dur" of a step is in TempoClock beats
+		sustainbeats = dur * legato
+		sustainseconds = sustainbeats / TempoClock.tempo
+		all synthdefs will have their gate shut after sustainbeats
+		all synthdefs will receive sustainseconds as argument
+
+		"slow"/"fast" do not alter TempoClock.tempo (this would affect other tracks)
+		they make delta, duration, sustain bigger or smaller
+
+		.wait is in TempoClock BEATS
+
+		when playing a sample buffer:
+        -----------------------------
+		"fit", "grow", "shrink" alter buffer playback "rate".
+		"grow" lowers the rate if buffer playback time < sustainseconds
+		"shrink" increases the rate if buffer playback time > sustainseconds
+        "fit" applies "shrink" or "grow" to fit buffer in sustainseconds exactly
+		"stretch" stretch delta, duration and sustain to contain entire buffer duration
+		default behaviour is to only stretch the sustain to match buffer duration
+
+		TODO
+		create control bus for frequency, along with a synth at kr rate getting
+		a new setpoint for every step (freq + glide percentage)
+		if glide is applicable for a step, then give the bus .asmap as freq arg
+		if not, then just give a number as arg
+
+		TODO
+		create control bus for fader (all sends must be POST fader: if you
+		fadeout some track, all the sends must fadeout too. I already have the
+		synthdef for it (uses an Env).
+
+		solo/unsolo, mute/unmute work with flags in Library.at(\tidy, \solo) and
+		Library.at(\tidy, \mute). All steps check if any tracks are set in the
+		solo or mute maps. If there are, and the track is among them, then the track
+		can play (solo) or not (mute). if the track is not among them, it can play
+		(mute) or not (solo). If the maps are empty, then all tracks can play;
+		no one has been soloed or muted in that case. Inside step.play, just
+		set the \gain parameter of the step to 0. This leaves the fader as is,
+		and all the sends will shutup too.
+
+		somehow i want to have overview and easy changing of faders/solo/mute/send
+
+		\tidy .faders(0, 0, 0.2, 0, 0.4, 0, 1.0, 0, 0, 0) // 16 of them?
+		\tidy   .solo(0, 0, 0, 0, 0, 1, 1, 0, 1, 0)
+		\tidy   .mute(0, 0, 0, 0, 0, 1, 1, 0, 1, 0)
+		\tidy   .send(\room, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0)
+
+		\tidy .solo(\a, \b)
+		\tidy .mute(\d)
+		\tidy .unsolo(\b)
+        \tidy .unmute_all
+		etc
+
+		would be quicker to have some curses window where you put the cursor
+		and then type a number 0-9 (which would be enough precision)
+		a bit like orca; the interpreter should re-interpret it from time 2 time
+		
+		(
+		// all fader and send volumes written as 0-9, internally divided by 9
+        //      f s m sends
+		\a --- "1 - - out 4 room 2 comb 1"
+		\b --- "3 - - out 6 room 0 comb 1"
+		)
+		
+		mute/solo should simply set \trig to 0, just like degrade
+
+		// would this work?
+		\mute \a
+		\solo \b
+		\unsolo \all
+		\faders \a 4 \b 6 \c 8
+
+		// the sends can now be removed from the patterns, you can change them
+		// without re-starting the pattern loop. But you cannot pattern them..
+    */
+
+	// \mute -- "a x b" could work because you can behave differently if
+	// the symbol is the \mute symbol! \solo idem.
+
 	play { |name, gain=1|
-		var def, sustain, buf, bpb=4;
-		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
+		var def, sustainbeats, buf;
 		var rate = (dict.at(\rate) ? 1);
 
-		this.move_fader(name);
-		this.set_solo(name);
-		
-		// calculate sustain (in seconds)
-		dict.at(\legato) ?? { dict.put(\legato, 0.8) }; // if glide default should be 1
-		sustain = dict.at(\legato) * dur / TempoClock.tempo / bpb;
-		sustain = sustain * (dict.at(\slow) ? 1) / (dict.at(\fast) ? 1);
+		//this.set_fader(name);
+		//this.set_solo(name);
 		
 		// give degrade function a chance to clear the trigger
-		if(trig > 0) {
-			dict.at(\degrade) !? { |v| trig = v.coin.asInteger }
-		};
-
+		if(trig > 0) { dict.at(\degrade) !? { |v| trig = v.coin.asInteger }	};
 		if(trig <= 0) { ^this };
 
-		// determine freq
+		dict.at(\legato) ?? {
+			dict.put(\legato, 0.8); 
+			dict.at(\stretch) !? { dict.put(\legato, 1) };
+		};
+
+		this.set_freq(name);
+		sustainbeats = this.set_sustain(name);
+
+		if((buf = this.set_buf(name)).isString) { buf.postln; ^this };
+
+		buf !? {
+			var bufseconds, bufbeats;
+
+			this.put(\bufnum, buf.bufnum);
+
+			// played notes change playbuf rate
+			rate = rate * (dict.at(\freq) ? 60.midicps) / (60.midicps);
+
+			// buffer samplerate vs system samplerate
+			rate = rate * buf.sampleRate / Server.default.sampleRate;
+
+			// calculate buffer duration in beats
+			bufseconds = buf.duration / (dict.at(\slices) ? 1);
+			bufbeats = bufseconds * TempoClock.tempo;
+
+			// adjust rate / sustainbeats according to functions applied
+			case
+			// fit: adjust rate so that playbuf will last sustainbeats
+			{ (dict.at(\fit) ? 0) > 0 } { rate = rate * bufbeats / sustainbeats }
+
+			// grow: if buffer is small, grow it until sustainbeats
+			{ (dict.at(\grow) ? 0) > 0 } {
+				if(bufbeats < sustainbeats) { rate = rate * bufbeats / sustainbeats }
+			}
+
+			// shrink: if buffer is long, shrink it into sustainbeats
+			{ (dict.at(\shrink) ? 0) > 0 } {
+				if(bufbeats > sustainbeats) { rate = rate * bufbeats / sustainbeats }
+			}
+
+			// crop: let sustainbeats as is, which may cutoff a long buffer
+			{ (dict.at(\crop) ? 0) > 0 } { }
+
+			// stretch: adjust the timing into the next step so that the buffer
+			// can be played in full; take release time into account though
+			{ (dict.at(\stretch) ? 0) > 0 } {
+				var relbeats;
+				
+				// stretch the cycle to contain buf
+
+				// keep simulaneous notes simultaneous -- "n [0,2,4]" -
+				if(delta > 0) { delta = bufbeats / dict.at(\legato); };
+
+				// start the release phase before the gate shuts for sample fadeout
+				relbeats = (dict.at(\rel) ? 0) * TempoClock.tempo;
+				sustainbeats = max(0, bufbeats - relbeats);
+			}
+			// default: play whole sample (can overflow next cycle(s))
+			{ sustainbeats = bufbeats };
+		};
+
+		dict.at(\speed) !? { |speed| rate = rate * speed };
+		dict.put(\rate, rate);
+		dict.put(\sustain, sustainbeats / TempoClock.tempo); // synthdef arg is in sec
+
+		// determine instrument (synthdef) to use
+		buf !? { if(buf.numChannels > 1) { def = \playbuf_s } { def = \playbuf_m } };
+		dict.at(\def) !? { def = dict.at(\def).asSymbol };
+		def ?? { "no def".postln; ^this };
+		dict.put(\def, def); // also for logging
+		def = SynthDescLib.at(def.asSymbol);
+		def ?? { "def % unknown".format(dict.at(\def)).postln; ^this };
+
+		// gain and sends
+		dict.put(\gain, gain * (dict.at(\gain) ? 1));
+		this.put_sends;
+
+		Routine({
+			var synth;
+			
+			// micro-timing: laid-back snaredrum
+			dict.at(\late) !? { |ms| (ms.clip(0, 20) / 1000 * TempoClock.tempo).wait };
+			
+			// play note
+			JSTidy.postprocessors.do { |p| p.(dict) };
+
+			Server.default.bind { synth = Synth(def.name, dict.asPairs) };
+
+			// end note
+			if(def.hasGate) {
+				sustainbeats.wait;
+				Server.default.bind { synth.set(\gate, 0) };
+			};
+		}).play;
+	}
+
+	set_buf { |name|
+		var buf;
+		
+		// playing a sample from the disk
+		this.at(\snd) !? { |bank|
+			var index = (dict.at(\buf) ? 0).asInteger;
+
+			(buf = Library.at(\samples, bank.asSymbol, index)) ?? {
+				^"buf % % unknown".format(bank, index);
+			};
+
+			^buf;
+		};
+
+		// playing a recorded sample
+		this.at(\play) !? { |rec|
+			(buf = Library.at(\tidyrec, rec.asSymbol)) ?? {
+				^"rec buf % unknown".format(rec);
+			};
+
+			^buf;
+		};
+
+		^nil;
+	}
+		
+	set_sustain { |name|
+		var beats;
+		
+		beats = dict.at(\legato) * dur;
+		^(beats * (dict.at(\slow) ? 1) / (dict.at(\fast) ? 1));
+	}
+	
+	set_freq { |name|
+		var scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
+
 		dict.at(\freq) ?? {
 			var steps = 12;
 			var mtranspose = dict.at(\mtranspose) ? 0;
@@ -549,85 +757,8 @@ JSTidyStep {
 				(midi + ctranspose).midicps * harmonic + detune
 			);
 		};
-
-		// playing a sample from the disk
-		this.at(\snd) !? { |bank|
-			var index = (dict.at(\buf) ? 0).asInteger;
-
-			(buf = Library.at(\samples, bank.asSymbol, index)) ?? {
-				"buf % % unknown".format(bank, index).postln;
-				^this
-			};
-		};
-
-		// playing a recorded sample
-		this.at(\play) !? { |rec|
-			buf = Library.at(\tidyrec, rec.asSymbol)
-		};
-
-		// we will play a sample
-		buf !? {
-			var bufdur = buf.duration / (dict.at(\slices) ? 1);
-			
-			case
-			{ buf.numChannels > 1 }
-			{ def = \playbuf_s }
-			{ def = \playbuf_m };
-
-			// rate is adjusted to the buffer samplerate
-			rate = rate * buf.sampleRate / Server.default.sampleRate;
-			
-			this.put(\bufnum, buf.bufnum);
-
-			// adjust rate / sustain as requested
-			case
-			{ (dict.at(\fit) ? 0) > 0 } { rate = rate * bufdur / sustain }
-			{ (dict.at(\grow) ? 0) > 0 } {
-				if(bufdur < sustain) { rate = rate * bufdur / sustain }
-			}
-			{ (dict.at(\shrink) ? 0) > 0 } {
-				if(bufdur > sustain) { rate = rate * bufdur / sustain }
-			}
-			{ (dict.at(\crop) ? 0) > 0 } { }
-			// default: play the whole sample
-			{ sustain = bufdur };
-		};
-
-		dict.at(\speed) !? { |speed| rate = rate * speed };
-		dict.put(\rate, rate);
-		dict.put(\sustain, sustain);
-
-		// determine instrument (synthdef) to use
-		dict.at(\def) !? { def = dict.at(\def).asSymbol };
-		def ?? { "no def".postln; ^this };
-		def !? { |name|
-			def = SynthDescLib.at(def.asSymbol);
-			def ?? { "def % unknown".format(name).postln; ^this };
-		};
-
-		// gain and sends
-		dict.put(\gain, gain * (dict.at(\gain) ? 1));
-		this.put_sends;
-
-		Routine({
-			var synth;
-			
-			// micro-timing: laid-back snaredrum
-			dict.at(\late) !? { |ms| (ms.clip(0, 20) / 1000 * TempoClock.tempo).wait };
-			
-			// play note
-			JSTidy.postprocessors.do { |p| p.(dict) };
-
-			Server.default.bind { synth = Synth(def.name, dict.asPairs) };
-
-			// end note
-			if(def.hasGate) {
-				(sustain * TempoClock.tempo).wait;
-				Server.default.bind { synth.set(\gate, 0) };
-			};
-		}).play;
 	}
-
+	
 	set_solo { |name|
 		// we need a solo/unsolo bus just like with move_fader because:
 		// - a running synth must hush if another orbit goes solo
@@ -637,7 +768,7 @@ JSTidyStep {
 		// 
 	}
 	
-	move_fader { |name|
+	set_fader { |name|
 		var bus;
 		
 		(bus = Library.at(\tidyar, name, \faderbus)) ?? {
@@ -1318,6 +1449,7 @@ JSTidyFP : JSTidyNode {
 		if(val == "crop" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "grow" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "shrink" and: (pattern.size <= 0)) { pattern = "1" };
+		if(val == "stretch") { pattern = "1" };
 
 		if(val == "fadein" or: (val == "fadeout")) {
 			if(pattern.size <= 0) { pattern = "1" };
@@ -1519,12 +1651,12 @@ JSTidyFX {
 		"-------------------------------------------".postln;
 		"\\tidy .load(folder) : load samples".postln;
 		"\\tidy .loaded : post samples loaded".postln;
-		"\\tidy .bpm(x) : set bpm to x beats per min".postln;
+		"\\tidy .cps(x) : set cycles per second".postln;
 		"\\tidy .quant(x) : set quantisation".postln;
 		"\\tidy .rec(name, cycles, bus, nudge)".postln;
 		"\\tidy .save(name, folder) : saves it".postln;
 		"\\tidy .end(x) : fadeout + end in x seconds".postln;
-		"\\tidy .setup(bpm, samplespath) : ~/setup.scd".postln;
+		"\\tidy .setup(cps, samplespath, scdfile)".postln;
 		"\\tidy .show(\\tree | \\cycle | \\step)".postln;
 		"".postln;
 		"\\bus .fx { funct } .play(dest, gain, [])".postln;
@@ -1544,7 +1676,7 @@ JSTidyFX {
 		^"".postln;
 	}
 
-	setup { |bpm=60, samples, scd|
+	setup { |cps, samples, scd|
 		if(this == \tidy) {
 			var s = Server.default;
 
@@ -1581,7 +1713,7 @@ JSTidyFX {
 				s.sync;
 
 				JSTidy.add_internal_synthdefs;
-				JSTidy.bpm(bpm);
+				JSTidy.cps(cps ? (80 / 60 / 4)); // default 80 bpm 4/4
 
 				samples !? { JSTidy.load(samples) };
 
@@ -1602,8 +1734,8 @@ JSTidyFX {
 	
 	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
 
-	bpm { |bpm| if(this == \tidy) { JSTidy.bpm(bpm) } }
-
+	cps { |cps| if(this == \tidy) { JSTidy.cps(cps) } }
+		
 	quant { |quant| if(this == \tidy) { JSTidy.quant(quant) } }
 
 	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
@@ -1656,7 +1788,7 @@ JSTidyFX {
 		if(this != \tidy) { ^super.rec };
 		
 		Routine({
-			var seconds, buf, old, now, quant, bpb=4;
+			var seconds, buf, old, now, quant;
 			var server = Server.default;
 
 			SynthDef(\rec, {
@@ -1679,11 +1811,11 @@ JSTidyFX {
 				Synth(\rec, [buf: buf, in: bus], nil, \addToTail);
 			});
 
-			bpb.do { |i| "..%".format(4 - i).postln; (1/bpb).wait };
+			4.do { |i| "..%".format(4 - i).postln; (1/4).wait };
 			"..go!".postln;
 			
 			// countup in post window during \rec synth lifetime
-			(cycles * bpb).do { |i| "--%".format(i+1).postln; (1/bpb).wait; };
+			(cycles * 4).do { |i| "--%".format(i+1).postln; (1/4).wait; };
 
 			// store the new recording; free old one if any
 			old = Library.at(\tidyrec, name.asSymbol);
@@ -1697,6 +1829,10 @@ JSTidyFX {
 	save { |name, folder|
 		Library.at(\tidyrec, name.asSymbol) !? { |buffer|
 			var path;
+			// TODO: if folder contains a filename at the end:
+			// - write to that file
+			
+			// else, do this:
 			folder = folder.standardizePath;
 			path = folder ++ "/" ++ name ++ ".wav";
 			"Writing %% to %".format("\\", name, path.quote).postln;
