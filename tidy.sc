@@ -1,8 +1,15 @@
 /*
+Midiin + rec
+Kbdin + rec
+Fit < number of cycles>
+Stretch < number of cycles> 
+Crop <number of cycles>
+
 practice (out loud)
 load only good samples
 CmdPeriod behaviour
 euclids inside <> do not seem to work (but maybe illogical to want)
+
 idea: sample - reverse - add delays - reverse back
 idea: sample - reverse - reverb - resample - loop
 loop: start, then loop middle of sample, at release play to the end
@@ -11,7 +18,8 @@ idea: "do 0 1 6 7 5 6" | ... would play the given cycle numbers
 idea: "rot 2" : rotate steps of each cycle 2 steps
 how to implement swing? "b [1 ~ 2]@2 3 4"
 idea: "life 0.6" : small variations (wow:flutter) am/fm, like velocity
-idea: "seed 1234" : control randomness; key tracking
+idea: "seed 1234" : control randomness;
+key tracking: lpf = (lpf.midicps + (kt * freq))
 idea: "trig 1000100101" or "hex 7fa4" to generate/override structure
 mini notation parser more robust: monitor index through recursive looping
 idea: "b [0 1 2 3 ~]??" means "pick one of them randomly"
@@ -19,12 +27,6 @@ startrek samples, cars you recorded in stereo
 make vital classic bend VOsc wavetables: sine - tri - saw - pulse - pulsew
 log: maybe add a parametername to log to only log that
 make all sample / synthdef volumes RIGHT
-
-store these in Library; inside play method a step can check it's name
-\solo -- "a b one beat" // soloes 4 tracks by name
-\mute -- "a b c" // same way
-	
-pattern "mute 1 0 1 1" should work too, or "solo 1 0 0 1"
 
 growl synthdef wants to send intermediate signal result to a reverb:
 - growl synthdef declares args "room" and "room_bus"
@@ -61,18 +63,13 @@ JSTidy {
 
 		Library.at(\tidy, \internal_synthdefs_added) !? { ^this };
 
-		SynthDef(\tidy_fader, {
-			var bus, val, target, time, trig;
-			target = \target.kr(0);
-			bus = \bus.kr(0);
-			time = \fadetime.kr(0);
-			val = In.kr(bus, 1);
-			trig = \trig.tr(0);
-			val = Env([val, val, target], [0, time]).kr(0, trig);
+		SynthDef(\tidy_fader, { |target=0, bus, fadetime=0, t_trig=1|
+			var val = In.kr(bus, 1);
+			val = Env([val, val, target], [0, fadetime]).kr(2, t_trig);
 			ReplaceOut.kr(bus, val);
 		}).add;
-
-		SynthDef(\playbuf_2, {
+		
+		SynthDef(\tidy_playbuf_2, {
 			var freq, pfreq, glide, sustain, gate, rate, bufnum, begin;
 			var att, rel, sig;
 			
@@ -97,7 +94,8 @@ JSTidy {
 			// maybe use Balance2 ?
 			sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
 
-			sig = sig * \gain.kr(1);
+			sig = sig * \gain_bus.kr(1);
+			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
 			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
 			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
@@ -105,7 +103,7 @@ JSTidy {
 			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}).add;
 
-		SynthDef(\playbuf_1, {
+		SynthDef(\tidy_playbuf_1, {
 			var freq, pfreq, glide, sustain, gate, rate, bufnum, begin;
 			var att, rel, sig;
 			
@@ -129,7 +127,8 @@ JSTidy {
 			sig = LeakDC.ar(sig);
 			sig = Pan2.ar(sig, \pan.kr(0), \vel.kr(0.5));
 
-			sig = sig * \gain.kr(1);
+			sig = sig * \gain_bus.kr(1);
+			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
 			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
 			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
@@ -160,11 +159,7 @@ JSTidy {
 		seconds = max(0.2, seconds); // no plopping please
 
 		Library.at(\tidyar) !? { |dict|
-			dict.keys.do { |name|
-				Library.at(\tidyar, name, \routine) !? {
-					JSTidy.hush(name, seconds)
-				}
-			}
+			dict.keys.do { |name| JSTidy.hush(name, seconds) }
 		};
 
 		Library.at(\tidykr) !? { |dict|
@@ -182,23 +177,74 @@ JSTidy {
 	
 	*hush { |name, seconds=0|
 		Routine({
-			// stop the routine
 			var beats;
+
+			// turn down the volume
 			seconds = max(0.2, seconds);
 			beats = seconds * TempoClock.tempo;
-			Library.at(\tidyar, name, \fader_synth) !? { |synth|
+			Library.at(\tidyar, name, \gain_synth) !? { |synth|
 				Server.default.bind {
 					synth.set(\target, 0, \trig, 1, \fadetime, seconds)
 				}
 			};
 			beats.wait;
-			Library.at(\tidyar, name, \routine) !? { |routine|
-				Library.put(\tidyar, name, \routine, nil);
-				routine.stop
+
+			// stop the orbit
+			Library.at(\tidyar, name, \orbit) !? { |orbit|
+				Library.put(\tidyar, name, \orbit, nil);
+				orbit.stop
 			};
 			
 			"hushed %".format(name).postln;
 		}).play;
+	}
+
+	*mute { |str|
+		var muted = Set.new;
+		str.asString.split($ ).do { |key|
+			case
+			{ key.isNil } { }
+			{ key.asString.size <= 0 } { }
+			{ muted.add(key.asSymbol) }
+		};
+		Library.put(\tidy, \muted, muted);
+		^this.pr_set_mute_buses;
+	}
+
+	*solo { |str|
+		var soloed = Set.new;
+		str.asString.split($ ).do { |key|
+			case
+			{ key.isNil } { }
+			{ key.asString.size <= 0 } { }
+			{ soloed.add(key.asSymbol) }
+		};
+		Library.put(\tidy, \soloed, soloed);
+		^this.pr_set_mute_buses;
+	}
+
+	// something has changed in the soloed or muted list.
+	// this might affect one or more orbits.
+	// let all orbits re-think the value for their mute_bus
+	//
+	// why is there a mute_bus for each orbit?
+	// if orbit \a starts playing a loooong note
+	// and orbit \b is put in solo
+	// then the loooong note on \a should be muted while still playing
+	// this is done by using the value of the mute_bus in all synthdefs
+	// as an inverted multiplier for the generated sound
+	//
+	*pr_set_mute_buses {
+		var soloed = Library.at(\tidy, \soloed) ? Set.new;
+		var muted = Library.at(\tidy, \muted) ? Set.new;
+
+		(Library.at(\tidyar) ? Dictionary.new).keys.do { |key|
+			Library.at(\tidyar, key.asSymbol, \orbit) !? { |orbit|
+				orbit.set_mute_bus;
+			};
+		};
+
+		^"soloed %, muted %".format(soloed.as(Array), muted.as(Array));
 	}
 
 	// cycles per second
@@ -254,110 +300,23 @@ JSTidy {
 	}
 
 	*loaded { |width=40|
-		var len=width;
 		"".padLeft(width, "-").postln;
 		if(Library.at(\samples).isNil) {
 			"** no banks / samples **".post
 		} {
+			var line="";
 			Library.at(\samples).keys.asArray.sort.do({ |k|
 				var val = Library.at(\samples, k.asSymbol);
 				var str = "% % - ".format(k, val.size);
-				if((len - (str.size)) < 0) { "".postln; len=width };
-				len = len - (str.size);
-				str.post;
+				if((line + str).size > width) { line.postln; line="" };
+				line = line + str;
 			});
+			if(line.size > 0) { line.postln };
 		};
-		"".postln;
 		"".padLeft(width, "-").postln;
 		^"".postln;
 	}
 	
-	printOn { |stream|
-		// if tree is nil then something has gone wrong while creating tree
-		// in that case: stop here, so that the old tree will keep going.
-		tree ?? { "tree nil".postln; ^this };
-
-		if(JSTidy.should_log(\tree)) { tree.log };
-
-		name.printOn(stream);  // output to postwindow
-
-		// make sure that only 1 routine will replace the running
-		// routine at the next quantisation point. one could
-		// evaluate some code twice within one quantisation period!
-		Library.at(\tidyar, name, \evaluated) ?? { 
-
-			// a logical cycle lasts 1 TempoClock beat, quant is in cycles
-			Library.put(\tidyar, name, \evaluated, Routine({
-				var quant, nudge=0.001, now, wait, bus, synth;
-
-				// make sure there is a fader bus
-				(bus = Library.at(\tidyar, name, \fader_bus)) ?? {
-					bus = Bus.control(Server.default, 1);
-					Library.put(\tidyar, name, \fader_bus, bus);
-				};
-
-				// put fader synth on it, for setting the bus value
-				(synth = Library.at(\tidyar, name, \fader_synth)) ?? {
-					synth = Synth(\tidy_fader, [
-						\target, 0,
-						\bus, bus,
-						\fadetime, 0,
-						\trig, 0,
-					]);
-					Server.default.sync;
-					Library.put(\tidyar, name, \fader_synth, synth);
-				};
-				
-				// quantisation
-				now = thisThread.beats;
-				quant = JSTidy.quant;
-
-				// stop old routine <nudge> before starting the new one.
-				// nudge=0 : old routine triggers one more note, while the
-				// new routine also triggers it -> gives double note!
-				wait = (now + quant).div(quant) * quant - now;
-				if(wait < nudge) { wait = wait + quant };
-				
-				(wait - nudge).wait;
-				Library.at(\tidyar, name, \routine) !? { |r| r.stop };
-
-				nudge.wait;
-				Library.put(\tidyar, name, \routine, Routine({
-					var cycle, repeat, fading=0, prevfreq;
-					
-					// enable re-evaluation
-					Library.put(\tidyar, name, \evaluated, nil);
-
-					cycle = tree.get(JSTidyCycle.new, name);
-
-					repeat = inf;
-					cycle.steps.do({ |x| x.at(\once) !? { repeat = 1 } });
-
-					repeat.do({
-						if(JSTidy.should_log(\cycle), { cycle.postln });
-
-						cycle.steps.do({ |step|
-							step.put(\prevfreq, prevfreq);
-							step.put(\fading, fading);
-							step.play(name);
-							step.log;
-							fading = step.at(\fading);
-							prevfreq = step.at(\freq);
-							step.delta.wait;
-						});
-
-						cycle = tree.get(JSTidyCycle.new, name);
-					});
-
-					// you get here if the "once" function is used
-					// this Routine will stop, so remove it from library
-					Library.put(\tidyar, name, \routine, nil);
-					
-				}).play);
-			}).play);
-		};
-	}
-
 	// if you make a mistake, you might get here.
 	// printOn will do nothing if tree is nil: current sound keeps playing
 	doesNotUnderstand { |selector ... args|
@@ -438,6 +397,132 @@ JSTidy {
 	% {  |str| this.add(JSTidyCombBoth("%").add(this.func(str))) }
 	|% { |str| this.add(JSTidyCombLeft("%").add(this.func(str))) }
 	%| { |str| this.add(JSTidyCombRight("%").add(this.func(str))) }
+
+	printOn { |stream|
+		// if tree is nil then something has gone wrong while creating it
+		// in that case: stop here, so that the old tree will keep going.
+		tree ?? { "tree nil".postln; ^this };
+
+		if(JSTidy.should_log(\tree)) { tree.log };
+
+		name.printOn(stream);  // output to postwindow
+
+		Routine({
+			var orbit = Library.at(\tidyar, name, \orbit) ? JSOrbit(name);
+			Library.put(\tidyar, name, \orbit, orbit.start(tree));
+		}).play;
+	}
+}
+
+JSOrbit {
+	var name, tree, routine;
+	var <gain_bus, gain_routine, last_gain;
+	var <mute_bus, last_mute;
+	
+	*new { |name| ^this.newCopyArgs(name) }
+
+	alter { |step|
+		this.pr_alter_gain(step);
+		gain_bus ?? { gain_bus = Bus.control(Server.default, 1)	};
+		step.put(\gain_bus, gain_bus.asMap);
+		mute_bus ?? { mute_bus = Bus.control(Server.default, 1)	};
+		step.put(\mute_bus, mute_bus.asMap);
+	}
+
+	/*
+		possible commands:
+		\solo -- "a b x"  // sets the list of soloed orbits
+		\mute -- "a b x"  // sets the list of muted orbits
+	*/
+	set_mute_bus {
+		var should_mute = this.should_mute.asInteger;
+		if(should_mute == last_mute) { ^this };
+		mute_bus ?? { mute_bus = Bus.control(Server.default, 1)	};
+		mute_bus.setSynchronous(should_mute); // 0 or 1
+		last_mute = should_mute;
+	}
+	
+	should_mute {
+		var soloed, muted;
+
+		soloed = Library.at(\tidy, \soloed) ? Set.new;
+		muted = Library.at(\tidy, \muted) ? Set.new;
+
+		// solo wins from mute
+		if(soloed.includes(name.asSymbol)) { ^false };
+		if(muted.includes(name.asSymbol)) { ^true };
+		if(soloed.size > 0) { ^true };
+		^false;
+	}
+	
+	pr_alter_gain { |step|
+		var gain;
+		(gain = step.at(\gain)) ?? { ^this };
+		if(gain == last_gain) {	^this };
+		gain_bus ?? { gain_bus = Bus.control(Server.default, 1)	};
+		gain_routine ?? {
+			var sec = max(0.02, step.at(\gainsec) ? 0);
+			"% gain % -> % (%)".format(name, last_gain, gain, sec).postln;
+			last_gain = gain;
+			gain_routine = Routine({
+				Server.default.bind {
+					Synth(\tidy_fader, [
+						\target, gain,
+						\bus, gain_bus,
+						\fadetime, sec
+					]);
+				};
+				(sec * TempoClock.tempo).wait; // wait for synth
+				gain_routine = nil; // allow next gain change
+			}).play;
+		}
+	}
+
+	start { |newtree|
+		tree = newtree;
+		
+		routine ?? {
+			this.pr_quantize_wait;
+			
+			routine = Routine({
+				var cycle, repeat=inf, prevfreq;
+				
+				cycle = tree.get(JSTidyCycle.new, name);
+				cycle.steps.do({ |x| x.at(\once) !? { repeat = 1 } });
+
+				repeat.do({
+					if(JSTidy.should_log(\cycle), { cycle.postln });
+
+					cycle.steps.do({ |step|
+						step.put(\prevfreq, prevfreq);
+						step.play(name, this);
+						step.log;
+						prevfreq = step.at(\freq);
+						step.delta.wait;
+					});
+
+					cycle = tree.get(JSTidyCycle.new, name);
+				});
+
+				routine = nil; // if you get here then erase yourself
+			}).play;
+		};
+	}
+
+	stop {
+		routine !? { routine.stop };
+		routine = nil;
+		gain_bus !? { gain_bus.free; gain_bus = nil };
+	}
+
+	pr_quantize_wait {
+		var now, quant, wait;
+		
+		now = thisThread.beats;
+		quant = JSTidy.quant;
+		wait = (now + quant).div(quant) * quant - now;
+		wait.wait;
+	}
 }
 
 JSTidyCycle {
@@ -498,7 +583,7 @@ JSTidyStep {
 	put { |key, value| dict.put(key.asSymbol, value) }
 	at { |key| ^dict.at(key.asSymbol) }
 
-	play { |name|
+	play { |name, orbit|
 		var def, buf, slow, legato, sustain, degrade, rate, tempo;
 
 		// 1 cycle == 1 TempoClock beat == 1 bar
@@ -511,25 +596,17 @@ JSTidyStep {
 		legato = (dict.at(\legato) ? 0.8);
 		sustain = dur * legato;
 		rate = (dict.at(\rate) ? 1);
+
+		// mute & solo & degrade
+		if(orbit.should_mute) { ^this };
 		degrade = (dict.at(\degrade) ? 1).coin.asInteger;
 		if((trig * degrade) <= 0) { ^this };
+
+		orbit.alter(this);
+		
 		this.set_freq(name, sustain);
 		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
-		
-		// at evaluation, fading is 0. it can be set to 1 only one time.
-		if((dict.at(\fading) ? 0) <= 0) {
-			dict.at(\gain) !? { |val|
-				var sec = dict.at(\gainsec) ? 0;
-				Library.at(\tidyar, name, \fader_synth) !? { |synth|
-					Server.default.bind {
-						synth.set(\target, val, \fadetime, sec, \trig, 1);
-					};
-					dict.put(\fading, 1); // @see JSTidy.printOn
-				};
-			}
-		};
-		
-		dict.put(\gain, Library.at(\tidyar, name, \fader_bus).asMap);
+
 		if(this.play_midinote) { ^this };
 		this.at(\snd) !? { |bank|
 			var index = (dict.at(\buf) ? 0).asInteger;
@@ -543,20 +620,41 @@ JSTidyStep {
 		buf !? {
 			var bufseconds = buf.duration / (dict.at(\slices) ? 1);
 			var bufbeats = bufseconds * tempo;
-
+			var fit, stretch;
+			
 			this.put(\bufnum, buf.bufnum);
 			rate = rate * (dict.at(\freq) ? 60.midicps) / (60.midicps);
 			rate = rate * buf.sampleRate / Server.default.sampleRate;
 
+			fit = (dict.at(\fit) ? 0);
+			stretch = (dict.at(\stretch) ? 0);
+			
 			case
-			{ (dict.at(\fit) ? 0) > 0 } { rate = rate * bufbeats/sustain }
-			{ (dict.at(\stretch) ? 0) > 0 } {
-				// stretch the cycle: will not sync to other tracks!!
-				if(delta > 0) { delta = bufbeats }; // "n [0,2,4]"
-				dur = sustain = bufbeats;
+			// set playback rate so that sample plays within <fit> steps
+			// fit > 1 will make the step (and the cycle too) longer
+			// and that may break sync with other Orbits. But if you
+			// use numbers like 2, or 1.5, then some sync with other
+			// running Orbits will be kept.
+			{ fit > 0 } {
+				rate = rate * bufbeats / sustain / fit;
+				if(delta > 0) { delta = delta * fit };
 			}
+
+			// adapt delta (and sustain) to the length of the sample.
+			// the sample will then not overlap with the next step.
+			// this will change the total length of the cycle,
+			// and so the sync with other running Orbits is lost
+			{ stretch > 0 } {
+				if(delta > 0) { delta = bufbeats * stretch }; //"n [0,2,4]"
+				dur = sustain = bufbeats * stretch;
+			}
+
+			// if bufbeats > sustain, then the sample will be cut short
 			{ (dict.at(\crop) ? 0) > 0 } { }
-			{ sustain = bufbeats }; // default: not stretching the cycle
+
+			// default: delta remains what it is, sustain is adapted
+			// so that the whole sample can play out during the step
+			{ sustain = bufbeats };
 		};
 
 		dict.at(\speed) !? { |speed| rate = rate * speed };
@@ -564,7 +662,7 @@ JSTidyStep {
 		dict.put(\sustain, sustain / tempo); // seconds!
 		
 		// determine instrument (synthdef) to use
-		buf !? { def = "playbuf_%".format(buf.numChannels).asSymbol };
+		buf !? { def = "tidy_playbuf_%".format(buf.numChannels).asSymbol };
 		dict.at(\def) !? { def = dict.at(\def).asSymbol };
 		def ?? { "no def".postln; ^this };
 		dict.put(\def, def); // also for logging
@@ -578,32 +676,30 @@ JSTidyStep {
 			dict.at(\late) !? { |ms| (ms.clip(0,20)/1000 * tempo).wait };
 			JSTidy.postprocessors.do { |p| p.(dict) };
 			Server.default.bind { synth = Synth(def.name, dict.asPairs) };
-			if(def.hasGate) {
-				sustain.wait;
-				Server.default.bind { synth.set(\gate, 0) };
-			};
+			sustain.wait;
+			Server.default.bind { synth.set(\gate, 0) };
 		}).play;
 	}
 
+	// give me an int value
+	get_int { |key|		
+		(dict.at(key.asSymbol) ? 0) !? { |val|
+			if(val.asString.at(0) == $c) {
+				var bus;
+				bus = val.asString.drop(1).asInteger.asBus;
+				^bus.getSynchronous;
+			} {
+				^val.asInteger;
+			};
+		};
+		^nil;
+	}
+
 	set_freq { |name, sustain|
-		var bus, synth, scale, root2, sustainseconds;
+		var bus, synth, scale, sustainseconds;
 
 		sustainseconds = sustain / TempoClock.tempo;
 		scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
-
-		// if you do "root =root", then dict.at(\root) will be a symbol
-		// that symbol points to a controlbus. get the value from that
-		// controlbus at the moment you need it and use that
-		// TODO: make something more universal for this..
-		(dict.at(\root) ? 0) !? { |root|
-			if(root.asString.at(0) == $c) {
-				var bus;
-				bus = root.asString.drop(1).asInteger.asBus;
-				root2 = bus.getSynchronous;
-			} {
-				root2 = root.asInteger;
-			};
-		};
 
 		dict.at(\freq) ?? {
 			var steps = 12;
@@ -615,7 +711,7 @@ JSTidyStep {
 
 			var note = (degree + mtranspose).degreeToKey(scale, steps);
 			// midi is the midinote (continuous intermediate values)
-			var midi = ((note + gtranspose + root2) / steps + oct) * 12.0;
+			var midi = ((note + gtranspose + root) / steps + oct) * 12.0;
 			var ctranspose = 0;
 			var harmonic = 1.0;
 			var detune = 0;
@@ -1166,13 +1262,24 @@ JSTidyFP_Off : JSTidyNode {
 // reverse the dictionaries
 // TODO: i think you can also reverse the steps now, cos all cycles are completely
 // filled with steps (notes, elongaters, rests)
-JSTidyFP_Rev : JSTidyNode {
+/*
+OLD_JSTidyFP_Rev : JSTidyNode {
 	*new { |pattern| ^super.new("rev") }
 
 	get { |cycle, name|
 		var dicts = cycle.steps.collect { |step| step.dict };
 		dicts = (dicts ? []).reverse;
 		cycle.steps.do { |step| step.dict_(dicts.removeAt(0)) };
+		^cycle;
+	}
+}
+*/
+
+JSTidyFP_Rev : JSTidyNode {
+	*new { |pattern| ^super.new("rev") }
+
+	get { |cycle, name|
+		cycle.steps = cycle.steps.reverse;
 		^cycle;
 	}
 }
@@ -1263,6 +1370,8 @@ JSTidyFP : JSTidyNode {
 		if(val == "fit" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "crop" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "stretch") { pattern = "1" };
+		if(val == "mute" and: (pattern.size <= 0)) { pattern = "1" };
+		if(val == "solo" and: (pattern.size <= 0)) { pattern = "1" };
 
 		if(pattern.size > 0) { instance.add(JSTidyPattern(pattern)) };
 		^instance;
@@ -1462,7 +1571,8 @@ JSTidyFX {
 		"commands".postln;
 		"-------------------------------------------".postln;
 		"\\tidy .load(folder) : load samples".postln;
-		"\\tidy .loaded : post samples loaded".postln;
+		"\\tidy .samples : post samples loaded".postln;
+		"\\tidy .synthdefs : post synthdefs loaded".postln;
 		"\\tidy .cps(x) : set cycles per second".postln;
 		"\\tidy .quant(x) : set quantisation".postln;
 		"\\tidy .rec(name, cycles, bus, nudge)".postln;
@@ -1486,6 +1596,43 @@ JSTidyFX {
 		"both: |>|, |<|, |*|, |+|, |/|, |%|".postln;
 		
 		^"".postln;
+	}
+
+	synthdefs {
+		if(this == \tidy) {
+			var width=40, defs;
+			"".padLeft(width, "-").postln;
+			defs = Dictionary.newFrom([\fx, List.new, \src, List.new]);
+			SynthDescLib.global.synthDescs.keys.do { |k|
+				case
+				{ k.asString.keep(7) == "system_" } { }
+				{ k.asString.keep(4) == "old_" } { }
+				{
+					var added = false;
+					SynthDescLib.at(k).inputs.do { |iodesc|
+						if(iodesc.asString == "audio In in 2") {
+							defs[\fx].add(k);
+							added = true;
+						};
+					};
+					if(added.not) { defs[\src].add(k) };
+				}
+			};
+
+			defs.keysValuesDo({ |key, v|
+				var str="";
+				key.asString.toUpper.postln;
+				v.sort.do { |k|
+					if((str.size + k.asString.size) > 40) {
+						str.postln;
+						str = "";
+					};
+					str = str + k.asString + "-"
+				};
+				if(str.size > 0) { str.postln };
+			});
+			"".padLeft(width, "-").postln;
+		}
 	}
 
 	setup { |cps, scd|
@@ -1567,16 +1714,23 @@ JSTidyFX {
 
 	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
 	
-	loaded { if(this == \tidy) { JSTidy.loaded } }
+	samples { if(this == \tidy) { JSTidy.loaded } }
 
 	show { |what| if(this == \tidy) { JSTidy.log(what) } }
 
 	fx { |in| ^JSTidyFX(this, in) }	// return object to the Interpreter
 
-	% { |ha| "%: %".format("%", ha).postln } // experimental
-
+	scope {
+		defer {
+			var scope = Server.default.scope;
+			scope.window.alwaysOnTop_(true)
+		};
+	}
+	
 	-- { |in|
 		case
+		{ this == \mute } { ^JSTidy.mute(in.asString) }
+		{ this == \solo } { ^JSTidy.solo(in.asString) }
 		{ in.isFunction }
 		{
 			var bus, node, server = Server.default;
@@ -1605,7 +1759,7 @@ JSTidyFX {
 			^JSTidy(this).add_branch("--").add_func(in)
 		}
 		{
-			"strange input %".format(in.class).postln
+			"strange input %% -- %".format("\\", this, in.class).postln
 		}
 	}
 
@@ -1658,12 +1812,12 @@ JSTidyFX {
 	save { |name, folder|
 		Library.at(\tidyrec, name.asSymbol) !? { |buffer|
 			var path;
-			// TODO: if folder contains a filename at the end:
-			// - write to that file
-			
-			// else, do this:
-			folder = folder.standardizePath;
-			path = folder ++ "/" ++ name ++ ".wav";
+			if(folder.endsWith(".wav")) {
+				path = folder;
+			} {
+				folder = folder.standardizePath;
+				path = folder ++ "/" ++ name ++ ".wav";
+			};
 			"Writing %% to %".format("\\", name, path.quote).postln;
 			buffer.write(path, "wav");
 		};
