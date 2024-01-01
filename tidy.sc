@@ -1,9 +1,9 @@
 /*
 Midiin + rec
 Kbdin + rec
-Fit < number of cycles>
-Stretch < number of cycles> 
-Crop <number of cycles>
+
+	\help -- "" // lists all functions
+	\help -- "<function>"
 
 practice (out loud)
 load only good samples
@@ -164,7 +164,7 @@ JSTidy {
 
 		Library.at(\tidykr) !? { |dict|
 			Routine({
-				(seconds * TempoClock.tempo).wait;
+				(seconds * TempoClock.tempo).wait; // wait for hushes first
 				dict.keys.do { |name|
 					Library.at(\tidykr, name, \synth) !? { |synth|
 						synth.release
@@ -177,25 +177,10 @@ JSTidy {
 	
 	*hush { |name, seconds=0|
 		Routine({
-			var beats;
-
-			// turn down the volume
-			seconds = max(0.2, seconds);
-			beats = seconds * TempoClock.tempo;
-			Library.at(\tidyar, name, \gain_synth) !? { |synth|
-				Server.default.bind {
-					synth.set(\target, 0, \trig, 1, \fadetime, seconds)
-				}
-			};
-			beats.wait;
-
-			// stop the orbit
 			Library.at(\tidyar, name, \orbit) !? { |orbit|
 				Library.put(\tidyar, name, \orbit, nil);
-				orbit.stop
+				orbit.stop(seconds);
 			};
-			
-			"hushed %".format(name).postln;
 		}).play;
 	}
 
@@ -416,7 +401,7 @@ JSTidy {
 
 JSOrbit {
 	var name, tree, routine;
-	var <gain_bus, gain_routine, last_gain;
+	var <gain_bus, gain_routine, last_gain, gain_synth;
 	var <mute_bus, last_mute;
 	
 	*new { |name| ^this.newCopyArgs(name) }
@@ -459,14 +444,18 @@ JSOrbit {
 		var gain;
 		(gain = step.at(\gain)) ?? { ^this };
 		if(gain == last_gain) {	^this };
+		this.pr_set_gain(gain, max(0.02, step.at(\gainsec) ? 0));
+	}
+	
+	pr_set_gain { |gain, sec=0|
 		gain_bus ?? { gain_bus = Bus.control(Server.default, 1)	};
 		gain_routine ?? {
-			var sec = max(0.02, step.at(\gainsec) ? 0);
 			"% gain % -> % (%)".format(name, last_gain, gain, sec).postln;
 			last_gain = gain;
 			gain_routine = Routine({
+				gain_synth !? { gain_synth.free };
 				Server.default.bind {
-					Synth(\tidy_fader, [
+					gain_synth = Synth(\tidy_fader, [
 						\target, gain,
 						\bus, gain_bus,
 						\fadetime, sec
@@ -474,6 +463,7 @@ JSOrbit {
 				};
 				(sec * TempoClock.tempo).wait; // wait for synth
 				gain_routine = nil; // allow next gain change
+				gain_synth = nil;
 			}).play;
 		}
 	}
@@ -509,10 +499,18 @@ JSOrbit {
 		};
 	}
 
-	stop {
-		routine !? { routine.stop };
-		routine = nil;
-		gain_bus !? { gain_bus.free; gain_bus = nil };
+	stop { |seconds=0|
+		Routine({
+			gain_routine !? { gain_routine.stop; gain_routine=nil };
+			this.pr_set_gain(0, seconds);
+			(seconds * TempoClock.tempo).wait;
+
+			routine !? { routine.stop };
+			routine = nil;
+
+			gain_bus !? { gain_bus.free; gain_bus = nil };
+			"% stopped".format(name).postln;
+		}).play;
 	}
 
 	pr_quantize_wait {
@@ -621,7 +619,11 @@ JSTidyStep {
 			var bufseconds = buf.duration / (dict.at(\slices) ? 1);
 			var bufbeats = bufseconds * tempo;
 			var fit, stretch;
-			
+
+			// the default legato for samples = 1
+			legato = (dict.at(\legato) ? 1);
+			sustain = dur * legato;
+
 			this.put(\bufnum, buf.bufnum);
 			rate = rate * (dict.at(\freq) ? 60.midicps) / (60.midicps);
 			rate = rate * buf.sampleRate / Server.default.sampleRate;
@@ -630,23 +632,18 @@ JSTidyStep {
 			stretch = (dict.at(\stretch) ? 0);
 			
 			case
-			// set playback rate so that sample plays within <fit> steps
-			// fit > 1 will make the step (and the cycle too) longer
-			// and that may break sync with other Orbits. But if you
-			// use numbers like 2, or 1.5, then some sync with other
-			// running Orbits will be kept.
 			{ fit > 0 } {
-				rate = rate * bufbeats / sustain / fit;
-				if(delta > 0) { delta = delta * fit };
+				// stretch or shrink the step
+				if(delta > 0) { delta = delta * fit }; // "n [0,2,4]"
+				sustain = sustain * fit;
+				// stretch or shrink the sample to fit inside it
+				rate = rate * bufbeats / sustain;
 			}
 
-			// adapt delta (and sustain) to the length of the sample.
-			// the sample will then not overlap with the next step.
-			// this will change the total length of the cycle,
-			// and so the sync with other running Orbits is lost
 			{ stretch > 0 } {
+				// stretch or shrink the step to match the sample
 				if(delta > 0) { delta = bufbeats * stretch }; //"n [0,2,4]"
-				dur = sustain = bufbeats * stretch;
+				sustain = bufbeats * stretch;
 			}
 
 			// if bufbeats > sustain, then the sample will be cut short
@@ -655,6 +652,8 @@ JSTidyStep {
 			// default: delta remains what it is, sustain is adapted
 			// so that the whole sample can play out during the step
 			{ sustain = bufbeats };
+
+			dict.put(\sustainbeats, sustain);
 		};
 
 		dict.at(\speed) !? { |speed| rate = rate * speed };
@@ -1369,7 +1368,7 @@ JSTidyFP : JSTidyNode {
 		if(val == "degrade" and: (pattern.size <= 0)) { pattern = "0.5" };
 		if(val == "fit" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "crop" and: (pattern.size <= 0)) { pattern = "1" };
-		if(val == "stretch") { pattern = "1" };
+		if(val == "stretch" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "mute" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "solo" and: (pattern.size <= 0)) { pattern = "1" };
 
@@ -1651,7 +1650,10 @@ JSTidyFX {
 				SynthDef(\guard, {
 					var in = In.ar(0, channels), zero = DC.ar(0);
 					in = LeakDC.ar(in);
-					in = Select.ar(CheckBadValues.ar(in,0,0), [in,zero,zero,in]);
+					in = Select.ar(
+						CheckBadValues.ar(in,0,0),
+						[in,zero,zero,in]
+					);
 					in = Limiter.ar(in);
 					ReplaceOut.ar(0, in);
 				}).add;
@@ -1665,7 +1667,9 @@ JSTidyFX {
 						s.sync;
 						s.queryAllNodes;
 					});
-					CmdPeriod.add({ Routine { Library.at(\guard).value }.play; });
+					CmdPeriod.add({
+						Routine({ Library.at(\guard).value }).play;
+					});
 					Library.at(\guard).value;
 				});
 
@@ -1674,18 +1678,8 @@ JSTidyFX {
 				JSTidy.add_internal_synthdefs;
 				JSTidy.cps(cps ? (80 / 60 / 4)); // default 80 bpm 4/4
 
-				//samples !? { JSTidy.load(samples) };
-
-				//s.sync;
-
 				scd = (scd ? "~/setup.scd").standardizePath;
 				if(File.exists(scd)) { scd.load };
-
-				//scd !? { |file|
-				//	file = file.standardizePath;
-				//	"Loading %".format(file.quote).postln;
-				//	file.load;
-				//};
 
 				s.sync;
 
@@ -1716,6 +1710,12 @@ JSTidyFX {
 	
 	samples { if(this == \tidy) { JSTidy.loaded } }
 
+	sample { |bank, index|
+		if(this == \tidy) {
+			^Library.at(\samples, bank.asSymbol, index)
+		}
+	}
+	
 	show { |what| if(this == \tidy) { JSTidy.log(what) } }
 
 	fx { |in| ^JSTidyFX(this, in) }	// return object to the Interpreter
