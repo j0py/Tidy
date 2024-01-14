@@ -38,8 +38,6 @@ growl synthdef wants to send intermediate signal result to a reverb:
   - existing put_sends mechanism will supply \outx and \gainx args to growl
 so the synthdef dictates the name for the reverb (in tidal it is always "room" too)
 
-idea: visuals: a bash routine displaying animated gifs behind your transparent window it must be cheap on cpu and hassle free; fill a folder with the gifs and run it. maybe open a window using sc?
-
 \tidy .query : does s.queryAllNodes
 
 study these:
@@ -92,8 +90,8 @@ JSTidy {
 			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
 			sig = LeakDC.ar(sig);
 			// maybe use Balance2 ?
-			sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
-
+			//sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
+			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), \vel.kr(0.5));
 			sig = sig * \gain_bus.kr(1);
 			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
@@ -284,11 +282,13 @@ JSTidy {
 		{ Routine(func).play } { func.value };
 	}
 
-	*loaded { |width=40|
+	*loaded { |bank|
+		var width=40;
 		"".padLeft(width, "-").postln;
-		if(Library.at(\samples).isNil) {
-			"** no banks / samples **".post
-		} {
+		case
+		{ Library.at(\samples).isNil } { "** no banks / samples **".post }
+		{ bank.isNil }
+		{
 			var line="";
 			Library.at(\samples).keys.asArray.sort.do({ |k|
 				var val = Library.at(\samples, k.asSymbol);
@@ -297,9 +297,44 @@ JSTidy {
 				line = line + str;
 			});
 			if(line.size > 0) { line.postln };
+		}
+		{ Library.at(\samples, bank.asSymbol).isNil } {
+			"** unknown bank : % **".format(bank.asString).postln
+		}
+		{
+			"bank % samples:".format(bank.asString.quote).postln;
+			Library.at(\samples, bank.asSymbol).keys.asArray.sort.do({ |i|
+				var buf = Library.at(\samples, bank.asSymbol, i);
+				var filename = PathName(buf.path).fileName;
+				var index = i.asString.padLeft(3);
+				var sec = buf.duration.round(0.01).asString.padLeft(3);
+				"% (% sec) %".format(index, sec, filename).postln;
+			});
 		};
+		
 		"".padLeft(width, "-").postln;
 		^"".postln;
+	}
+
+	*audit { |bank|
+		Routine({
+			Library.at(\samples, bank.asSymbol).keys.asArray.sort.do({ |i|
+				var buf = Library.at(\samples, bank.asSymbol, i);
+				var filename = PathName(buf.path).fileName;
+				"% %".format(i.asString.padLeft(3), filename).postln;
+				case
+				{ buf.numChannels == 2 } {
+					{
+						PlayBuf.ar(2, buf, doneAction:2);
+					} .play
+				} {
+					{
+						Pan2.ar(PlayBuf.ar(1, buf, doneAction:2), 0)
+					} .play
+				};
+				(max(0.5, buf.duration) * TempoClock.tempo).wait;
+			});
+		}).play;
 	}
 	
 	// if you make a mistake, you might get here.
@@ -671,8 +706,16 @@ JSTidyStep {
 		this.put_sends;
 
 		Routine({
-			var synth;
-			dict.at(\late) !? { |ms| (ms.clip(0,20)/1000 * tempo).wait };
+			var synth, ms;
+
+			// why on earth does this stop the sound????
+			ms = (dict.at(\late) ? 0).asFloat;
+
+			if(ms > 0) {
+				var beats = (ms.clip(0, 20) / 1000 * tempo);
+				beats.wait;
+			};
+			
 			JSTidy.postprocessors.do { |p| p.(dict) };
 			Server.default.bind { synth = Synth(def.name, dict.asPairs) };
 			sustain.wait;
@@ -736,6 +779,7 @@ JSTidyStep {
 	}
 	
 	put_sends {
+		/*
 		var i = 1;
 		Library.at(\tidyar).keys.do { |key|
 			Library.at(\tidyar, key.asSymbol, \bus) !? { |bus|
@@ -744,6 +788,21 @@ JSTidyStep {
 					this.put(("out"++(i.asString)).asSymbol, bus.index);
 					this.put(("gain"++(i.asString)).asSymbol, gain);
 					i = i + 1;
+				}
+			}
+		};
+		*/
+
+		// shorter alternative : - "mix f4" -
+		this.at(\mix) !? { |mix|
+			var send = 1;
+			//"mix %".format(mix.asString.quote).postln;
+			mix.do { |gain, i|
+				Library.at(\tidyar, i.asSymbol, \bus) !? { |bus|
+					gain = gain.digit.linlin(0, 15, 0, 1).asFloat;
+					this.put(("out"++(send.asString)).asSymbol, bus.index);
+					this.put(("gain"++(send.asString)).asSymbol, gain);
+					send = send + 1;
 				}
 			}
 		}
@@ -866,9 +925,58 @@ JSTidyBranch : JSTidyNode {
 	is_branch { ^true }
 }
 
+
 // (cycle) |> (child), (/+*%<>)
 //
 JSTidyCombLeft : JSTidyNode {
+	get { |cycle, name|
+		var time, child = children.first.get(cycle, name);
+
+		time = 0;
+		cycle.steps.do { |step|
+			var other, keys;
+
+			other = child.at(time);
+
+			// collect all keys from both sides
+			keys = step.dict.keys;
+			other.dict.keys.do { |key| keys.add(key) };
+			
+			// combine the values for the keys
+			keys.do { |key|
+				var stepval = step.at(key);
+				var otherval = other.at(key);
+				
+				case
+				{ stepval.isNil } { step.put(key, otherval) }
+				{ otherval.isNil } { }
+				// now we know that both are not nil..
+				{ val == ">" } { step.put(key, otherval) }
+				{ val == "<" } { }
+				{ val == "+" } { step.put(key, stepval + otherval) }
+				{ val == "*" } { step.put(key, stepval * otherval) }
+				{ val == "/" } {
+					if(otherval == 0) {
+						step.put(key, 0)
+					} {
+						step.put(key, stepval / otherval)
+					}
+				}
+				{ val == "%" } { step.put(key, stepval % otherval) }
+				{ }
+			};
+			
+			time = time + step.delta;
+		};
+
+		^cycle;
+	}
+}
+
+
+// (cycle) |> (child), (/+*%<>)
+//
+JSTidyCombLeftDepr : JSTidyNode {
 	get { |cycle, name|
 		var time, child = children.first.get(cycle, name);
 
@@ -890,7 +998,18 @@ JSTidyCombLeft : JSTidyNode {
 				{ val == "<" }
 				{ step.put(key, step.at(key) ? other.at(key)) }
 				{ val == "+" }
-				{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
+				{
+					var stepval = step.at(key);
+					var otherval = other.at(key);
+					
+					// string or number type?
+					if((stepval.isString) or: (otherval.isString)) {
+						step.put(key, (stepval ? "") ++ (otherval ? ""));
+					} {
+						step.put(key, (stepval ? 0) + (otherval ? 0));
+					}
+				}
+				//{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
 				{ val == "*" }
 				{ step.put(key, (step.at(key) ? 1) * (other.at(key) ? 1)) }
 				{ val == "/" }
@@ -931,26 +1050,26 @@ JSTidyCombRight : JSTidyNode {
 			other.dict.keys.do { |key| keys.add(key) };
 			
 			keys.do { |key|
+				var stepval = step.at(key);
+				var otherval = other.at(key);
+				
 				case
-				{ val == ">" }
-				{ step.put(key, step.at(key) ? other.at(key)) }
-				{ val == "<" }
-				{ step.put(key, other.at(key) ? step.at(key)) }
-				{ val == "+" }
-				{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
-				{ val == "*" }
-				{ step.put(key, (step.at(key) ? 1) * (other.at(key) ? 1)) }
+				{ stepval.isNil } { step.put(key, otherval) }
+				{ otherval.isNil } { }
+				// now we know that both are not nil..
+				{ val == ">" } { }
+				{ val == "<" } { step.put(key, otherval) }
+				{ val == "+" } { step.put(key, stepval + otherval) }
+				{ val == "*" } { step.put(key, stepval * otherval) }
 				{ val == "/" }
 				{
-					var value = (step.at(key) ? 0);
-					if(value == 0) {
+					if(stepval == 0) {
 						step.put(key, 0) // division by zero
 					} {
-						step.put(key, (other.at(key) ? 0) / value)
-					};
+						step.put(key, otherval / stepval)
+					}
 				}
-				{ val == "%" }
-				{ step.put(key, (other.at(key) ? 0) % (step.at(key) ? 0)) }
+				{ val == "%" } { step.put(key, otherval % stepval) }
 				{ }
 			};
 
@@ -1021,33 +1140,31 @@ JSTidyCombBoth : JSTidyNode {
 
 	combine { |step, stepAt, right|
 		stepAt.dict.keysValuesDo { |key, value|
+			var stepval = step.at(key);
 			case
 			{ val == ">" }
-			{
-				if(right.isNil) {
-					step.put(key, value)
-				}
-			}
+			{ if(right.isNil) { step.put(key, value) } }
 			{ val == "<" }
+			{ if(right.notNil) { step.put(key, value) } }
+			{ val == "+" }
 			{
-				if(right.notNil) {
-					step.put(key, value)
+				if((stepval.isString) or: (value.isString)) {
+					step.put(key, (stepval ? "") ++ (value ? ""));
+				} {
+					step.put(key, (stepval ? 0) + value);
 				}
 			}
-			{ val == "+" }
-			{ step.put(key, (step.at(key) ? 0) + value) }
-			{ val == "*" }
-			{ step.put(key, (step.at(key) ? 1) * value) }
+			{ val == "*" } { step.put(key, (stepval ? 1) * value) }
 			{ val == "/" }
 			{
 				if(right.isNil, {
 					if(value == 0, {
 						step.put(key, 0) // division by zero
 					}, {
-						step.put(key, (step.at(key) ? 0) / value)
+						step.put(key, (stepval ? 0) / value)
 					});
 				},{
-					var divider = (step.at(key) ? 0);
+					var divider = (stepval ? 0);
 					if(divider == 0, {
 						step.put(key, 0) // division by zero
 					}, {
@@ -1058,9 +1175,9 @@ JSTidyCombBoth : JSTidyNode {
 			{ val == "%" }
 			{
 				if(right.isNil, {
-					step.put(key, (step.at(key) ? 0) % value)
+					step.put(key, (stepval ? 0) % value)
 				}, {
-					step.put(key, value % (step.at(key) ? 0))
+					step.put(key, value % (stepval ? 0))
 				})
 			}
 			{ }
@@ -1074,6 +1191,65 @@ JSTidyPattern : JSTidyNode {
 	get { |cycle, name|
 		seq = seq ? JSMiniParser(val).parse; // lazy instantiate
 		^JSTidyCycle(seq.next_cycle);
+	}
+}
+
+JSTidyHexPattern : JSTidyNode {
+	var seq, posted;
+
+	get { |cycle, name|
+		var steps;
+		seq = seq ? JSMiniParser(val).parse; // lazy instantiate
+		steps = [];
+		seq.next_cycle.do { |step|
+			var bits, delta, dur;
+
+			// step: [<trig>, <delta>, <dur>, <str>, <num>]
+			// str should be a hex string
+			bits = step[3].collectAs({|c|
+				c.digit.min(15).asBinaryDigits(4)
+			}, Array).flatten;
+
+			posted ?? { posted = 1; bits.join.postln }; // post once
+			
+			delta = step[1] / bits.size;
+			dur = step[2] / bits.size;
+
+			bits.do { |bit|
+				steps = steps.add([bit, delta, dur, "~1"[bit], step[4]]);
+			};
+		};
+
+		^JSTidyCycle(steps);
+	}
+}
+
+// \a -- "s bd" - "bin <----722280080101 fcc0a123>" - "log"
+// "0" velocity 0 = a rest, "-" is a prolonged note
+// create a JSTidyBinPattern class that will create the steps
+// with the str value as input. each step will have delta,dur,trig,vel
+// \a -- "s bd" >| "bin <[----7222 80080101]!2 fcc0a123>" will work!
+
+JSTidyFP_Bin : JSTidyNode {
+	var <>pattern;
+	
+	*new { |pattern|
+		var instance = super.new("bin");
+		instance.pattern_(pattern);
+		instance.add(JSTidyPattern(pattern));
+		^instance;
+	}
+
+	get { |cycle, name|
+		cycle = children.first.get(cycle, name);
+
+		cycle.steps.do { |step|
+			step.at(\str) !? { |str| step.put(\bin, str) };
+			step.put(\str, nil);
+			step.put(\num, nil);
+		};
+
+		^cycle;
 	}
 }
 
@@ -1342,7 +1518,7 @@ JSTidyFP_Every : JSTidyNode {
 		if(turn > 0) {
 			if(((turn + (0 - offset)) % when) == 0) {
 				children.drop(-1).do { |child|
-					cycle = child.get(cycle, name)
+					cycle = child.get(cycle, name);
 				};
 			};
 		};
@@ -1351,7 +1527,29 @@ JSTidyFP_Every : JSTidyNode {
 	}
 }
 
-// OK
+// use hex number(s) to create structure: - "hex 4026" - "b 0" - "s bd" -
+// todo: - "hex 4026:2" - could result in \hex = 2 in the step dict
+JSTidyFP_Hex : JSTidyNode {
+
+	*new { |pattern|
+		var instance = super.new("hex");
+		if(pattern.size > 0) { instance.add(JSTidyHexPattern(pattern)) };
+		^instance;
+	}
+
+	get { |cycle, name|
+		cycle = children.first.get(cycle, name);
+
+		cycle.steps.do { |step|
+			step.put(\hex, (step.at(\str) ? step.trig).asString);
+			step.put(\str, nil);
+			step.put(\num, nil);
+		};
+
+		^cycle;
+	}
+}
+
 JSTidyFP : JSTidyNode {
 	*new { |val, pattern|
 		var abbr = [
@@ -1442,6 +1640,7 @@ JSTidyFP : JSTidyNode {
 					{ val == "speed" } {
 						step.put(\speed, str.asFloat.midiratio)
 					}
+					{ val == "mix" } { step.put(\mix, str) }
 					{ step.put(val.asSymbol, str.asFloat) };
 				};
 			};
@@ -1464,9 +1663,109 @@ JSTidyFP : JSTidyNode {
 	}
 }
 
-/////////////////////////////////////////////////////
-// HOOKS
-/////////////////////////////////////////////////////
+JSVisuals {
+	classvar window;
+	var images;
+	
+	*new { |path| ^super.new.init(path ? "~/visuals") }
+
+	init { |path|
+		path = PathName(path.asString.standardizePath);
+		if(path.isFile) {
+			images = [ path.asString ];
+		} {
+			images = path.files.collect({ |p| p.fullPath });
+		};
+
+		"Visuals :".postln;
+		images.do { |image|	image.postln };
+		"".postln;
+	}
+
+	start {
+		var size, dur, zoomout, maxsize, index=0, image, previmage,
+		point, prevpoint, view, frames, framerate, sizeenv;
+
+		window !? { window.close };
+		window = Window.new(border: false, bounds: Window.screenBounds);
+
+		size = 100; // width/height taken from image
+		dur = 15; // seconds per image
+		zoomout = 2;
+		maxsize = size * zoomout;
+
+		image = Image.open(images[index]);
+		point = Point(
+			rrand(maxsize, image.bounds.width - maxsize),
+			rrand(maxsize, image.bounds.height - maxsize),
+		);
+		
+		previmage = nil;
+		prevpoint = nil;
+		
+		window.onClose_({
+			image !? { image.free };
+			previmage !? { previmage.free };
+		});
+
+		view = UserView.new(window, window.bounds);
+		frames = 0;
+		framerate = 20;
+		
+		sizeenv = Env([1,1,zoomout], dur * framerate / 2, \sin);
+		
+		view.drawFunc_({
+			var w, h;
+
+			if(frames <= 0) {
+				previmage !? { previmage.free };
+				previmage = image;
+				prevpoint = point;
+				index = index + 1 % images.size;
+				image = Image.open(images[index]);
+				point = Point(
+					rrand(maxsize, image.bounds.width - maxsize),
+					rrand(maxsize, image.bounds.height - maxsize),
+				);
+			};
+
+			w = maxsize;
+			h = w / window.bounds.width * window.bounds.height;
+
+			previmage.drawInRect(
+				rect: window.bounds,
+				fromRect: Rect(
+					prevpoint.x - (w/2),
+					prevpoint.y - (h/2),
+					w,
+					h
+				),
+				fraction: 1.0
+			);
+
+			w = size * sizeenv.at(frames % (dur * framerate));
+			h = w / window.bounds.width * window.bounds.height;
+
+			image.drawInRect(
+				rect: window.bounds,
+				fromRect: Rect(point.x - (w/2), point.y - (h/2), w, h),
+				fraction: (frames % (dur * framerate)).linlin(
+					0, dur * framerate / 2, 0.0, 1.0
+				)
+			);
+
+			frames = frames + 1 % (dur * framerate);
+		});
+
+		view.frameRate_(framerate);
+		view.animate_(true);
+		window.front;
+	}
+
+	*stop {
+		{ window !? { window.close } }.defer;
+	}
+}
 
 JSTidyFX {
 	var <>name, <>func_or_symbol;
@@ -1562,6 +1861,10 @@ JSTidyFX {
 	printOn { |stream| "fx: %% ".format("\\", name).printOn(stream) }
 }
 
+/////////////////////////////////////////////////////
+// HOOKS
+/////////////////////////////////////////////////////
+
 + Symbol {
 	doc {
 		if(this != \tidy) { ^super.help };
@@ -1597,7 +1900,7 @@ JSTidyFX {
 		^"".postln;
 	}
 
-	synthdefs {
+	defs {
 		if(this == \tidy) {
 			var width=40, defs;
 			"".padLeft(width, "-").postln;
@@ -1700,15 +2003,27 @@ JSTidyFX {
 		};
 	}
 	
-	end { |fadeTime=1| if(this == \tidy) { JSTidy.end(fadeTime) } }
+	end { |fadeTime=1|
+		if(this == \tidy) {
+			Routine({
+				fadeTime.wait;
+				JSVisuals.stop;
+			}).play;
+			JSTidy.end(fadeTime);
+		}
+	}
 
 	cps { |cps| if(this == \tidy) { JSTidy.cps(cps) } }
 		
 	quant { |quant| if(this == \tidy) { JSTidy.quant(quant) } }
 
 	load { |folder| if(this == \tidy) { JSTidy.load(folder) } }
+
+	visuals { |folder| if(this == \tidy) { JSVisuals(folder).start } }
 	
-	samples { if(this == \tidy) { JSTidy.loaded } }
+	samples { |bank| if(this == \tidy) { JSTidy.loaded(bank) } }
+
+	audit { |bank| if(this == \tidy) { JSTidy.audit(bank) } }
 
 	sample { |bank, index|
 		if(this == \tidy) {
@@ -1726,7 +2041,7 @@ JSTidyFX {
 			scope.window.alwaysOnTop_(true)
 		};
 	}
-	
+
 	-- { |in|
 		case
 		{ this == \mute } { ^JSTidy.mute(in.asString) }
