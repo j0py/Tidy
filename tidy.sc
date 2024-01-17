@@ -48,6 +48,12 @@ study these:
 }.play
 
 movie score: intro,theme,build,climax,theme(emotional),intro(conclusive)
+
+connect to animatron?
+
+meltdown function: lower volume + global freq multiplier + global tempo
+
+implement superfm like roger, but keep it tidy..
 */
 
 JSTidy {
@@ -92,6 +98,7 @@ JSTidy {
 			// maybe use Balance2 ?
 			//sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
 			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), \vel.kr(0.5));
+			sig = sig * \am.kr(1);
 			sig = sig * \gain_bus.kr(1);
 			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
@@ -125,6 +132,7 @@ JSTidy {
 			sig = LeakDC.ar(sig);
 			sig = Pan2.ar(sig, \pan.kr(0), \vel.kr(0.5));
 
+			sig = sig * \am.kr(1);
 			sig = sig * \gain_bus.kr(1);
 			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
@@ -332,7 +340,7 @@ JSTidy {
 						Pan2.ar(PlayBuf.ar(1, buf, doneAction:2), 0)
 					} .play
 				};
-				(max(0.5, buf.duration) * TempoClock.tempo).wait;
+				(max(2, buf.duration) * TempoClock.tempo).wait;
 			});
 		}).play;
 	}
@@ -434,6 +442,9 @@ JSTidy {
 	}
 }
 
+// TODO: a disadvantage of Orbit with a routine that keeps running is that
+// after re-evaluation, you are forced to wait till the cycle is
+// done, and if you use slow=16, this takes a long time..
 JSOrbit {
 	var name, tree, routine;
 	var <gain_bus, gain_routine, last_gain, gain_synth;
@@ -476,8 +487,7 @@ JSOrbit {
 	}
 	
 	pr_alter_gain { |step|
-		var gain;
-		(gain = step.at(\gain)) ?? { ^this };
+		var gain = (step.at(\gain) ? 0.1);
 		if(gain == last_gain) {	^this };
 		this.pr_set_gain(gain, max(0.02, step.at(\gainsec) ? 0));
 	}
@@ -506,6 +516,8 @@ JSOrbit {
 	start { |newtree|
 		tree = newtree;
 		
+		"% started".format(name).postln;
+				
 		routine ?? {
 			this.pr_quantize_wait;
 			
@@ -614,11 +626,32 @@ JSTidyStep {
 
 	putAll { |argdict| dict.putAll(argdict) }
 	put { |key, value| dict.put(key.asSymbol, value) }
-	at { |key| ^dict.at(key.asSymbol) }
+
+	at { |key|
+		key = key.asSymbol;
+		// tesing with key = \legato
+		// TODO:
+		// mind you: if the key is a direct synthdef param, then
+		// you should NOT get the value from the bus by yourself
+		// at all. how can we know this??
+		if(key == \legato) {
+			var val = dict.at(key);
+			if(val.class == Symbol) {
+				var bus, index = val.asString.drop(1).asInteger;
+				bus = Bus(\control, index, 1, Server.default);
+				^bus.getSynchronous;
+			};
+			
+			^val;
+		};
+		
+		^dict.at(key.asSymbol)
+	}
 
 	play { |name, orbit|
 		var def, buf, slow, legato, sustain, degrade, rate, tempo;
-
+		var bufbeats, bufseconds;
+		
 		// 1 cycle == 1 TempoClock beat == 1 bar
 		// all synthdefs will have their gate shut after sustain beats
 		// all synthdefs will receive sustain arg in seconds
@@ -626,8 +659,6 @@ JSTidyStep {
 		slow = (dict.removeAt(\slow) ? 1) / (dict.removeAt(\fast) ? 1);
 		delta = delta * slow;
 		dur = dur * slow;
-		legato = (dict.at(\legato) ? 0.8);
-		sustain = dur * legato;
 		rate = (dict.at(\rate) ? 1);
 
 		// mute & solo & degrade
@@ -637,50 +668,49 @@ JSTidyStep {
 
 		orbit.alter(this);
 		
-		this.set_freq(name, sustain);
-		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
-
-		if(this.play_midinote) { ^this };
 		this.at(\snd) !? { |bank|
 			var index = (dict.at(\buf) ? 0).asInteger;
 			buf = Library.at(\samples, bank.asSymbol, index);
 			buf ?? { "buf % % unknown".format(bank, index).postln; ^this };
 		};
+		
 		this.at(\play) !? { |rec|
 			buf = Library.at(\tidyrec, rec.asSymbol);
 			buf ?? { "rec buf % unknown".format(rec).postln; ^this };
 		};
-		buf !? {
-			var bufseconds = buf.duration / (dict.at(\slices) ? 1);
-			var bufbeats = bufseconds * tempo;
-			var fit, stretch;
 
-			// the default legato for samples = 1
-			legato = (dict.at(\legato) ? 1);
-			sustain = dur * legato;
+		legato = (this.at(\legato) ? 0.8);
+		buf !? { legato = (this.at(\legato) ? 1) };
+		sustain = dur * legato;
+		
+		buf !? {
+			var fit, stretch;
+			
+			def = "tidy_playbuf_%".format(buf.numChannels).asSymbol;
+			bufseconds = buf.duration * ((dict.at(\end) ? 1) - (dict.at(\begin) ? 0));
+			//bufseconds = buf.duration / (dict.at(\slices) ? 1);
+			bufbeats = bufseconds * tempo;
 
 			this.put(\bufnum, buf.bufnum);
+
 			rate = rate * (dict.at(\freq) ? 60.midicps) / (60.midicps);
 			rate = rate * buf.sampleRate / Server.default.sampleRate;
 
-			fit = (dict.at(\fit) ? 0);
-			stretch = (dict.at(\stretch) ? 0);
-			
 			case
-			{ fit > 0 } {
+			{ (fit = (dict.at(\fit) ? 0)) > 0 }
+			{
 				// stretch or shrink the step
 				if(delta > 0) { delta = delta * fit }; // "n [0,2,4]"
 				sustain = sustain * fit;
 				// stretch or shrink the sample to fit inside it
 				rate = rate * bufbeats / sustain;
 			}
-
-			{ stretch > 0 } {
+			{ (stretch = (dict.at(\stretch) ? 0)) > 0 }
+			{
 				// stretch or shrink the step to match the sample
 				if(delta > 0) { delta = bufbeats * stretch }; //"n [0,2,4]"
 				sustain = bufbeats * stretch;
 			}
-
 			// if bufbeats > sustain, then the sample will be cut short
 			{ (dict.at(\crop) ? 0) > 0 } { }
 
@@ -690,19 +720,25 @@ JSTidyStep {
 
 			dict.put(\sustainbeats, sustain);
 		};
-
-		dict.at(\speed) !? { |speed| rate = rate * speed };
-		dict.put(\rate, rate);
-		dict.put(\sustain, sustain / tempo); // seconds!
 		
-		// determine instrument (synthdef) to use
-		buf !? { def = "tidy_playbuf_%".format(buf.numChannels).asSymbol };
+		this.set_freq(name);
+		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
+
+		if(this.play_midinote) { ^this };
+
+		// TODO: move this to an earlier stage, so that you can then
+		// know what parameters are direct synth control inputs, and
+		// what parameters need to be read from the control bus here.
 		dict.at(\def) !? { def = dict.at(\def).asSymbol };
 		def ?? { "no def".postln; ^this };
 		dict.put(\def, def); // also for logging
 		def = SynthDescLib.at(def.asSymbol);
 		def ?? { "def % unknown".format(dict.at(\def)).postln; ^this };
 
+		dict.at(\speed) !? { |speed| rate = rate * speed };
+		dict.put(\rate, rate);
+		dict.put(\sustain, sustain / tempo); // seconds!
+		
 		this.put_sends;
 
 		Routine({
@@ -723,24 +759,9 @@ JSTidyStep {
 		}).play;
 	}
 
-	// give me an int value
-	get_int { |key|		
-		(dict.at(key.asSymbol) ? 0) !? { |val|
-			if(val.asString.at(0) == $c) {
-				var bus;
-				bus = val.asString.drop(1).asInteger.asBus;
-				^bus.getSynchronous;
-			} {
-				^val.asInteger;
-			};
-		};
-		^nil;
-	}
+	set_freq { |name|
+		var bus, synth, scale;
 
-	set_freq { |name, sustain|
-		var bus, synth, scale, sustainseconds;
-
-		sustainseconds = sustain / TempoClock.tempo;
 		scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
 
 		dict.at(\freq) ?? {
@@ -778,32 +799,17 @@ JSTidyStep {
 		^false;
 	}
 	
+	// - "mix f4" -, with a sensible default
 	put_sends {
-		/*
-		var i = 1;
-		Library.at(\tidyar).keys.do { |key|
-			Library.at(\tidyar, key.asSymbol, \bus) !? { |bus|
-				this.at(key.asSymbol) !? { |gain|
-					gain = (gain ? 1).asFloat;
-					this.put(("out"++(i.asString)).asSymbol, bus.index);
-					this.put(("gain"++(i.asString)).asSymbol, gain);
-					i = i + 1;
-				}
-			}
-		};
-		*/
+		var mix, send=1;
 
-		// shorter alternative : - "mix f4" -
-		this.at(\mix) !? { |mix|
-			var send = 1;
-			//"mix %".format(mix.asString.quote).postln;
-			mix.do { |gain, i|
-				Library.at(\tidyar, i.asSymbol, \bus) !? { |bus|
-					gain = gain.digit.linlin(0, 15, 0, 1).asFloat;
-					this.put(("out"++(send.asString)).asSymbol, bus.index);
-					this.put(("gain"++(send.asString)).asSymbol, gain);
-					send = send + 1;
-				}
+		mix = this.at(\mix) ? "f";
+		mix.do { |gain, i|
+			Library.at(\tidyar, i.asSymbol, \bus) !? { |bus|
+				gain = gain.digit.linlin(0, 15, 0, 1).asFloat;
+				this.put(("out"++(send.asString)).asSymbol, bus.index);
+				this.put(("gain"++(send.asString)).asSymbol, gain);
+				send = send + 1;
 			}
 		}
 	}
@@ -1482,12 +1488,14 @@ JSTidyFP_Slice : JSTidyNode {
 				slice = abs(slice);
 				step.put(\rate, -1);
 				step.put(\begin, max(1, min(slice + 1, count)) / count);
+				step.put(\end, step.at(\begin) + (1/count));
 			} {
 				step.put(\begin, max(0, min(slice, count - 1)) / count);
+				step.put(\end, step.at(\begin) + (1/count));
 			};
 
 			step.put(\legato, (step.at(\legato) ? 1));
-			step.put(\slices, count);
+			//step.put(\slices, count);
 			step.put(\str, nil);
 			
 			// use "fit", "crop" or "stretch"
@@ -2035,6 +2043,8 @@ JSTidyFX {
 
 	fx { |in| ^JSTidyFX(this, in) }	// return object to the Interpreter
 
+	get { if(this == \tempo) { ^(\tempo.bus.getSynchronous) } }
+	
 	scope {
 		defer {
 			var scope = Server.default.scope;
