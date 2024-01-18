@@ -538,6 +538,10 @@ JSOrbit {
 						step.delta.wait;
 					});
 
+					// tree could have been switched for a new tree while
+					// the previous cycle was playing out (so if the cycle
+					// lasts long then you have to wait for the new tree
+					// to come alive long too).
 					cycle = tree.get(JSTidyCycle.new, name);
 				});
 
