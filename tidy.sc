@@ -52,8 +52,6 @@ movie score: intro,theme,build,climax,theme(emotional),intro(conclusive)
 connect to animatron?
 
 meltdown function: lower volume + global freq multiplier + global tempo
-
-implement superfm like roger, but keep it tidy..
 */
 
 JSTidy {
@@ -62,6 +60,37 @@ JSTidy {
 	var <>name, <tree, cur;
 
 	*new { |name| ^super.new.name_(name) }
+
+	// param "ragged": how much random noise/dust on envelopes + exp(3)
+	*def { |name, func, variants|
+		SynthDef(name, {
+			var sig, env, vel, freq, glide, sus, pfreq, gate,
+			att, rel, crv, amp;
+
+			vel = \vel.kr(0.5); // timbre (synthdef can use this)
+			amp = \amp.kr(0.5); // volume accents in patterns or modulation
+			gate = \gate.kr(1);
+			freq = \freq.kr(440);
+			pfreq = \prevfreq.kr(440);
+			sus = \sustain.kr(0); // sustain in seconds
+			glide = \glide.kr(0);
+			freq = Env([pfreq, freq], glide * sus, \exp).kr(0, gate);
+			att = \att.kr(0);
+			rel = \rel.kr(0.1);
+			crv = \crv.kr(-4);
+
+			env = Env.asr(att, 1, rel, crv).kr(2, gate);
+			sig = SynthDef.wrap(func,[],[freq, vel, gate, sus, att, rel]);
+			sig = sig * env * amp;
+			sig = sig * \gain_bus.kr(1); // fade in/out
+			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
+
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
+		}, variants: variants).add;
+	}
 
 	*add_internal_synthdefs {
 
@@ -72,75 +101,28 @@ JSTidy {
 			val = Env([val, val, target], [0, fadetime]).kr(2, t_trig);
 			ReplaceOut.kr(bus, val);
 		}).add;
-		
-		SynthDef(\tidy_playbuf_2, {
-			var freq, pfreq, glide, sustain, gate, rate, bufnum, begin;
-			var att, rel, sig;
-			
-			gate = \gate.kr(1);
-			rate = \rate.kr(1);
 
-			// glide v6
-			freq = \freq.kr(60.midicps);
-			pfreq = \prevfreq.kr(440);
-			sustain = \sustain.kr(0);
-			glide = \glide.kr(0);
-			freq = Env([pfreq, freq], glide * sustain, \exp).kr(0, gate);
+		JSTidy.def(\tidy_playbuf_2, { |freq, vel, gate, sustain, att, rel|
+			var sig, rate, bufnum, begin;
+
 			rate = \rate.kr(1) * freq / 60.midicps;
-			
 			bufnum = \bufnum.kr(0);
 			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			att = \att.kr(0.02);
-			rel = \rel.kr(0.02);
 			sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
-			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
 			sig = LeakDC.ar(sig);
-			// maybe use Balance2 ?
-			//sig = Splay.ar(sig, 0, \vel.kr(0.5), \pan.kr(0));
-			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), \vel.kr(0.5));
-			sig = sig * \am.kr(1);
-			sig = sig * \gain_bus.kr(1);
-			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
-
-			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
-			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
-			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
-		}).add;
-
-		SynthDef(\tidy_playbuf_1, {
-			var freq, pfreq, glide, sustain, gate, rate, bufnum, begin;
-			var att, rel, sig;
+			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
+		});
+		
+		JSTidy.def(\tidy_playbuf_1, { |freq, vel, gate, sustain, att, rel|
+			var sig, rate, bufnum, begin;
 			
-			gate = \gate.kr(1);
-			rate = \rate.kr(1);
-
-			// glide v6
-			freq = \freq.kr(60.midicps);
-			pfreq = \prevfreq.kr(440);
-			sustain = \sustain.kr(0);
-			glide = \glide.kr(0);
-			freq = Env([pfreq, freq], glide * sustain, \exp).kr(0, gate);
 			rate = \rate.kr(1) * freq / 60.midicps;
-			
 			bufnum = \bufnum.kr(0);
 			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			att = \att.kr(0.02);
-			rel = \rel.kr(0.02);
 			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
-			sig = sig * Env.asr(att, 1, rel).kr(2, gate);
 			sig = LeakDC.ar(sig);
-			sig = Pan2.ar(sig, \pan.kr(0), \vel.kr(0.5));
-
-			sig = sig * \am.kr(1);
-			sig = sig * \gain_bus.kr(1);
-			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
-
-			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
-			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
-			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
-		}).add;
+			sig = Pan2.ar(sig, \pan.kr(0));
+		});
 
 		Library.put(\tidy, \internal_synthdefs_added, true);
 	}
@@ -442,9 +424,6 @@ JSTidy {
 	}
 }
 
-// TODO: a disadvantage of Orbit with a routine that keeps running is that
-// after re-evaluation, you are forced to wait till the cycle is
-// done, and if you use slow=16, this takes a long time..
 JSOrbit {
 	var name, tree, routine;
 	var <gain_bus, gain_routine, last_gain, gain_synth;
@@ -514,6 +493,8 @@ JSOrbit {
 	}
 
 	start { |newtree|
+		this.pr_quantize_wait(0.01);
+
 		tree = newtree;
 		
 		"% started".format(name).postln;
@@ -564,12 +545,13 @@ JSOrbit {
 		}).play;
 	}
 
-	pr_quantize_wait {
+	pr_quantize_wait { |nudge=0|
 		var now, quant, wait;
 		
 		now = thisThread.beats;
 		quant = JSTidy.quant;
 		wait = (now + quant).div(quant) * quant - now;
+		wait = wait - nudge;
 		wait.wait;
 	}
 }
@@ -730,14 +712,10 @@ JSTidyStep {
 
 		if(this.play_midinote) { ^this };
 
-		// TODO: move this to an earlier stage, so that you can then
-		// know what parameters are direct synth control inputs, and
-		// what parameters need to be read from the control bus here.
-		dict.at(\def) !? { def = dict.at(\def).asSymbol };
+		dict.at(\def) !? { def = dict.at(\def) };
 		def ?? { "no def".postln; ^this };
+		def = def.asSymbol;
 		dict.put(\def, def); // also for logging
-		def = SynthDescLib.at(def.asSymbol);
-		def ?? { "def % unknown".format(dict.at(\def)).postln; ^this };
 
 		dict.at(\speed) !? { |speed| rate = rate * speed };
 		dict.put(\rate, rate);
@@ -757,7 +735,7 @@ JSTidyStep {
 			};
 			
 			JSTidy.postprocessors.do { |p| p.(dict) };
-			Server.default.bind { synth = Synth(def.name, dict.asPairs) };
+			Server.default.bind { synth = Synth(def, dict.asPairs) };
 			sustain.wait;
 			Server.default.bind { synth.set(\gate, 0) };
 		}).play;
@@ -1408,7 +1386,7 @@ JSTidyFP_Off : JSTidyNode {
 		time = 0;
 		org.steps.do { |step|
 			pq.put(time, step);
-			time = time + step.delta;
+			time = time + step.delta; // slow/fast?
 		};
 
 		// add steps of the stack + alt cycle to PriorityQueue
@@ -1416,7 +1394,7 @@ JSTidyFP_Off : JSTidyNode {
 		time = 0;
 		stack.do { |step|
 			pq.put(time, step);
-			time = time + step.delta;
+			time = time + step.delta; // slow/fast?
 		};
 		stack = [];
 
@@ -1443,22 +1421,6 @@ JSTidyFP_Off : JSTidyNode {
 		^JSTidyCycle(this.steps_from_priority_queue(pq));
 	}
 }
-
-// reverse the dictionaries
-// TODO: i think you can also reverse the steps now, cos all cycles are completely
-// filled with steps (notes, elongaters, rests)
-/*
-OLD_JSTidyFP_Rev : JSTidyNode {
-	*new { |pattern| ^super.new("rev") }
-
-	get { |cycle, name|
-		var dicts = cycle.steps.collect { |step| step.dict };
-		dicts = (dicts ? []).reverse;
-		cycle.steps.do { |step| step.dict_(dicts.removeAt(0)) };
-		^cycle;
-	}
-}
-*/
 
 JSTidyFP_Rev : JSTidyNode {
 	*new { |pattern| ^super.new("rev") }
@@ -1916,27 +1878,37 @@ JSTidyFX {
 		if(this == \tidy) {
 			var width=40, defs;
 			"".padLeft(width, "-").postln;
-			defs = Dictionary.newFrom([\fx, List.new, \src, List.new]);
+			defs = Dictionary.newFrom([
+				\fx, SortedList.new, \src, SortedList.new
+			]);
 			SynthDescLib.global.synthDescs.keys.do { |k|
 				case
 				{ k.asString.keep(7) == "system_" } { }
 				{ k.asString.keep(4) == "old_" } { }
+				{ k.asString.keep(5) == "tidy_" } { }
 				{
 					var added = false;
 					SynthDescLib.at(k).inputs.do { |iodesc|
 						if(iodesc.asString == "audio In in 2") {
-							defs[\fx].add(k);
+							defs[\fx].add(k.asString);
 							added = true;
 						};
 					};
-					if(added.not) { defs[\src].add(k) };
+					if(added.not) {
+						defs[\src].add(k.asString);
+						SynthDescLib.at(k).def.variants !? { |variants|
+							variants.keys.do { |v|
+								defs[\src].add((k ++ "." ++ v).asString);
+							}
+						}
+					};
 				}
 			};
 
 			defs.keysValuesDo({ |key, v|
 				var str="";
 				key.asString.toUpper.postln;
-				v.sort.do { |k|
+				v.do { |k|
 					if((str.size + k.asString.size) > 40) {
 						str.postln;
 						str = "";
