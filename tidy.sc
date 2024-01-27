@@ -12,18 +12,15 @@ euclids inside <> do not seem to work (but maybe illogical to want)
 
 idea: sample - reverse - add delays - reverse back
 idea: sample - reverse - reverb - resample - loop
+
 loop: start, then loop middle of sample, at release play to the end
 idea: "dup 3" | ... would repeat all cycles 3 times
 idea: "do 0 1 6 7 5 6" | ... would play the given cycle numbers
-idea: "rot 2" : rotate steps of each cycle 2 steps
 how to implement swing? "b [1 ~ 2]@2 3 4"
-idea: "life 0.6" : small variations (wow:flutter) am/fm, like velocity
 idea: "seed 1234" : control randomness;
 key tracking: lpf = (lpf.midicps + (kt * freq))
-idea: "trig 1000100101" or "hex 7fa4" to generate/override structure
 mini notation parser more robust: monitor index through recursive looping
 idea: "b [0 1 2 3 ~]??" means "pick one of them randomly"
-startrek samples, cars you recorded in stereo
 make vital classic bend VOsc wavetables: sine - tri - saw - pulse - pulsew
 log: maybe add a parametername to log to only log that
 make all sample / synthdef volumes RIGHT
@@ -79,9 +76,12 @@ JSTidy {
 			rel = \rel.kr(0.1);
 			crv = \crv.kr(-4);
 
-			env = Env.asr(att, 1, rel, crv).kr(2, gate);
-			sig = SynthDef.wrap(func,[],[freq, vel, gate, sus, att, rel]);
-			sig = sig * env * amp;
+			sig = SynthDef.wrap(
+				func,
+				[],
+				[freq, vel, gate, sus, att, rel, crv]
+			);
+			sig = sig * amp;
 			sig = sig * \gain_bus.kr(1); // fade in/out
 			sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
 
@@ -90,6 +90,25 @@ JSTidy {
 			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
 			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}, variants: variants).add;
+	}
+
+	*env { |env|
+		^Env(
+			[
+				0,
+				env.div(0x1000000).mod(0x10),
+				env.div(0x10000).mod(0x10),
+				env.div(0x100).mod(0x10),
+				env.mod(0x10),
+			] / 0xf,
+			[
+				env.div(0x10000000).mod(0x10),
+				env.div(0x100000).mod(0x10),
+				env.div(0x1000).mod(0x10),
+				env.div(0x10).mod(0x10),
+			] .linexp(0, 0xf, 0.00001, 1.5),
+			\sin
+		)
 	}
 
 	*add_internal_synthdefs {
@@ -102,7 +121,7 @@ JSTidy {
 			ReplaceOut.kr(bus, val);
 		}).add;
 
-		JSTidy.def(\tidy_playbuf_2, { |freq, vel, gate, sustain, att, rel|
+		JSTidy.def(\tidy_pb_2, { |freq, vel, gate, sustain, att, rel, crv|
 			var sig, rate, bufnum, begin;
 
 			rate = \rate.kr(1) * freq / 60.midicps;
@@ -111,9 +130,10 @@ JSTidy {
 			sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
 			sig = LeakDC.ar(sig);
 			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
+			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
 		});
 		
-		JSTidy.def(\tidy_playbuf_1, { |freq, vel, gate, sustain, att, rel|
+		JSTidy.def(\tidy_pb_1, { |freq, vel, gate, sustain, att, rel, crv|
 			var sig, rate, bufnum, begin;
 			
 			rate = \rate.kr(1) * freq / 60.midicps;
@@ -122,6 +142,7 @@ JSTidy {
 			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
 			sig = LeakDC.ar(sig);
 			sig = Pan2.ar(sig, \pan.kr(0));
+			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
 		});
 
 		Library.put(\tidy, \internal_synthdefs_added, true);
@@ -509,6 +530,11 @@ JSOrbit {
 				cycle.steps.do({ |x| x.at(\once) !? { repeat = 1 } });
 
 				repeat.do({
+					var rot;
+
+					cycle.steps.do({ |x| rot ?? rot = x.at(\rot) });
+					cycle.rotate(rot ? 0);
+					
 					if(JSTidy.should_log(\cycle), { cycle.postln });
 
 					cycle.steps.do({ |step|
@@ -561,6 +587,13 @@ JSTidyCycle {
 
 	*new { |steps| ^super.new.make_steps(steps).make_index }
 
+	rotate { |rot|
+		if(rot != 0) {
+			steps = steps.rotate(rot);
+			this.make_index;
+		}
+	}
+	
 	// step_array: [ [<trig>, <delta>, <dur>, <str>, <num>], .. ]
 	make_steps { |steps_array|
 		steps_array !? {
@@ -672,7 +705,7 @@ JSTidyStep {
 		buf !? {
 			var fit, stretch;
 			
-			def = "tidy_playbuf_%".format(buf.numChannels).asSymbol;
+			def = "tidy_pb_%".format(buf.numChannels).asSymbol;
 			bufseconds = buf.duration * ((dict.at(\end) ? 1) - (dict.at(\begin) ? 0));
 			//bufseconds = buf.duration / (dict.at(\slices) ? 1);
 			bufbeats = bufseconds * tempo;
@@ -719,7 +752,10 @@ JSTidyStep {
 
 		dict.at(\speed) !? { |speed| rate = rate * speed };
 		dict.put(\rate, rate);
-		dict.put(\sustain, sustain / tempo); // seconds!
+
+		// sustain is overrideable in seconds (for percussive synths)
+		dict.at(\sustain) ?? { dict.put(\sustain, sustain/tempo) }; //secs
+		sustain = dict.at(\sustain) * tempo; // beats
 		
 		this.put_sends;
 
@@ -1461,7 +1497,6 @@ JSTidyFP_Slice : JSTidyNode {
 			};
 
 			step.put(\legato, (step.at(\legato) ? 1));
-			//step.put(\slices, count);
 			step.put(\str, nil);
 			
 			// use "fit", "crop" or "stretch"
@@ -1543,6 +1578,7 @@ JSTidyFP : JSTidyNode {
 		if(val == "stretch" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "mute" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "solo" and: (pattern.size <= 0)) { pattern = "1" };
+		if(val == "rot" and: (pattern.size <= 0)) { pattern = "1" };
 
 		if(pattern.size > 0) { instance.add(JSTidyPattern(pattern)) };
 		^instance;
@@ -1600,6 +1636,7 @@ JSTidyFP : JSTidyNode {
 					{ str == "~" } { step.trig = 0 }
 					{ val == "def" } { step.put(\def, str.asSymbol) }
 					{ val == "buf" } { step.put(\buf, str.asInteger) }
+					{ val == "rot" } { step.put(\rot, str.asInteger) }
 					{ val == "vel" } { step.put(\vel, str.asFloat) }
 					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "play" } { step.put(\play, str.asSymbol) }
