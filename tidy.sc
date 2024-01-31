@@ -52,7 +52,7 @@ meltdown function: lower volume + global freq multiplier + global tempo
 */
 
 JSTidy {
-	classvar loglevel, <postprocessors;
+	classvar loglevel, <postprocessors, <>freqmul=1, <>scale, <>root;
 
 	var <>name, <tree, cur;
 
@@ -76,6 +76,8 @@ JSTidy {
 			rel = \rel.kr(0.1);
 			crv = \crv.kr(-4);
 
+			freq = freq * \freqmul.kr(1); // multiply freq everywhere
+			
 			sig = SynthDef.wrap(
 				func,
 				[],
@@ -121,7 +123,8 @@ JSTidy {
 			ReplaceOut.kr(bus, val);
 		}).add;
 
-		JSTidy.def(\tidy_pb_2, { |freq, vel, gate, sustain, att, rel, crv|
+		JSTidy.def(\tidy_pb_2, {
+			arg freq, vel, gate, sustain, att, rel, crv;
 			var sig, rate, bufnum, begin;
 
 			rate = \rate.kr(1) * freq / 60.midicps;
@@ -133,7 +136,8 @@ JSTidy {
 			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
 		});
 		
-		JSTidy.def(\tidy_pb_1, { |freq, vel, gate, sustain, att, rel, crv|
+		JSTidy.def(\tidy_pb_1, {
+			arg freq, vel, gate, sustain, att, rel, crv;
 			var sig, rate, bufnum, begin;
 			
 			rate = \rate.kr(1) * freq / 60.midicps;
@@ -245,12 +249,14 @@ JSTidy {
 	*cps { |cps|
 		if(cps.isNil) {
 			var cps = TempoClock.tempo;
-			"tempo: % cps (% bpm)".format(cps, cps * 4 * 60).postln;
+			"cps: % (% bpm)".format(cps, cps * 4 * 60).postln;
 			^cps;
-		} {
+		};
+
+		Routine({
+			JSTidy.quantize;
 			TempoClock.tempo_(cps);
-			("\\tempo -- { DC.kr(" ++ (cps) ++ ") }").interpret;
-		}
+		}).play;
 	}
 	
 	// quant is in cycles (= 1 TempoClock beat)
@@ -268,7 +274,7 @@ JSTidy {
 
 	*load { |folder|
 
-		var func = {
+		var old_func = {
 			var s = Server.default;
 			folder = folder.standardizePath;
 			(folder +/+ "*").pathMatch.do({ |bank|
@@ -283,6 +289,28 @@ JSTidy {
 					index = index + 1;
 				});
 				s.sync;
+			});
+			s.sync;
+			"Loaded %".format(folder.quote).postln;
+			JSTidy.loaded;
+		};
+		
+		var func = {
+			var s = Server.default;
+			folder = folder.standardizePath;
+			(folder +/+ "*").pathMatch.do({ |bank|
+				var samples = List.new;
+				(bank +/+ "*.wav").pathMatch.do({ |file|
+					samples.add(Buffer.read(s, file));
+				});
+				
+				s.sync;
+
+				Library.put(
+					\samples,
+					bank.basename.withoutTrailingSlash.asSymbol,
+					samples
+				);
 			});
 			s.sync;
 			"Loaded %".format(folder.quote).postln;
@@ -314,8 +342,17 @@ JSTidy {
 		}
 		{
 			"bank % samples:".format(bank.asString.quote).postln;
+			/* old
 			Library.at(\samples, bank.asSymbol).keys.asArray.sort.do({ |i|
 				var buf = Library.at(\samples, bank.asSymbol, i);
+				var filename = PathName(buf.path).fileName;
+				var index = i.asString.padLeft(3);
+				var sec = buf.duration.round(0.01).asString.padLeft(3);
+				"% (% sec) %".format(index, sec, filename).postln;
+			});
+			*/
+
+			Library.at(\samples, bank.asSymbol).do({ |buf, i|
 				var filename = PathName(buf.path).fileName;
 				var index = i.asString.padLeft(3);
 				var sec = buf.duration.round(0.01).asString.padLeft(3);
@@ -329,8 +366,11 @@ JSTidy {
 
 	*audit { |bank|
 		Routine({
-			Library.at(\samples, bank.asSymbol).keys.asArray.sort.do({ |i|
+			/* old
+ 			Library.at(\samples, bank.asSymbol).keys.asArray.sort.do({ |i|
 				var buf = Library.at(\samples, bank.asSymbol, i);
+			*/
+			Library.at(\samples, bank.asSymbol).do({ |buf, i|
 				var filename = PathName(buf.path).fileName;
 				"% %".format(i.asString.padLeft(3), filename).postln;
 				case
@@ -647,29 +687,25 @@ JSTidyStep {
 	put { |key, value| dict.put(key.asSymbol, value) }
 
 	at { |key|
-		key = key.asSymbol;
-		// tesing with key = \legato
-		// TODO:
-		// mind you: if the key is a direct synthdef param, then
-		// you should NOT get the value from the bus by yourself
-		// at all. how can we know this??
-		if(key == \legato) {
-			var val = dict.at(key);
-			if(val.class == Symbol) {
-				var bus, index = val.asString.drop(1).asInteger;
-				bus = Bus(\control, index, 1, Server.default);
-				^bus.getSynchronous;
-			};
-			
-			^val;
-		};
+		var val = dict.at(key.asSymbol);
+
+		if(key.asSymbol == \pan) { "PAN".postln };
 		
-		^dict.at(key.asSymbol)
+		// check if we have a bus, and if so, read value from it
+		// if you need to have the Bus yourself, then use dict.at()
+		if(val.class == Bus) { ^val.getSynchronous };
+		^val;
 	}
 
+	removeAt { |key|
+		var val = this.at(key.asSymbol);
+		dict.removeAt(key.asSymbol);
+		^val;
+	}
+	
 	play { |name, orbit|
 		var def, buf, slow, legato, sustain, degrade, rate, tempo;
-		var bufbeats, bufseconds;
+		var bufbeats, bufseconds, do_not_play=false;
 		
 		// 1 cycle == 1 TempoClock beat == 1 bar
 		// all synthdefs will have their gate shut after sustain beats
@@ -678,45 +714,59 @@ JSTidyStep {
 		slow = (dict.removeAt(\slow) ? 1) / (dict.removeAt(\fast) ? 1);
 		delta = delta * slow;
 		dur = dur * slow;
-		rate = (dict.at(\rate) ? 1);
+		rate = (this.at(\rate) ? 1);
 
 		// mute & solo & degrade
-		if(orbit.should_mute) { ^this };
-		degrade = (dict.at(\degrade) ? 1).coin.asInteger;
-		if((trig * degrade) <= 0) { ^this };
-
+		if(orbit.should_mute) { do_not_play = true };
+		degrade = (this.at(\degrade) ? 1).coin.asInteger;
+		if((trig * degrade) <= 0) { do_not_play = true };
+		if(trig <= 0) { do_not_play = true };
+		
 		orbit.alter(this);
 		
-		this.at(\snd) !? { |bank|
+		dict.at(\snd) !? { |bank|
 			var index = (dict.at(\buf) ? 0).asInteger;
-			buf = Library.at(\samples, bank.asSymbol, index);
-			buf ?? { "buf % % unknown".format(bank, index).postln; ^this };
+			buf = Library.at(\samples, bank.asSymbol).wrapAt(index);
+			buf ?? {
+				"buf % % unknown".format(bank, index).postln;
+				do_not_play = true;
+			};
 		};
 		
-		this.at(\play) !? { |rec|
+		dict.at(\play) !? { |rec|
 			buf = Library.at(\tidyrec, rec.asSymbol);
-			buf ?? { "rec buf % unknown".format(rec).postln; ^this };
+			buf ?? {
+				"rec buf % unknown".format(rec).postln;
+				do_not_play = true;
+			};
 		};
 
+		if(do_not_play) {
+			dict.keysValuesDo({ |k,v|
+				if(v.class == Bus) { dict.put(k, v.asMap) }
+			});
+			^this;
+		};
+		
 		legato = (this.at(\legato) ? 0.8);
 		buf !? { legato = (this.at(\legato) ? 1) };
 		sustain = dur * legato;
 		
 		buf !? {
-			var fit, stretch;
+			var fit, stretch, end, begin;
 			
 			def = "tidy_pb_%".format(buf.numChannels).asSymbol;
-			bufseconds = buf.duration * ((dict.at(\end) ? 1) - (dict.at(\begin) ? 0));
-			//bufseconds = buf.duration / (dict.at(\slices) ? 1);
+			end = (this.at(\end) ? 1);
+			begin = (this.at(\begin) ? 0);
+			bufseconds = buf.duration * (end - begin);
 			bufbeats = bufseconds * tempo;
 
 			this.put(\bufnum, buf.bufnum);
-
-			rate = rate * (dict.at(\freq) ? 60.midicps) / (60.midicps);
+			//rate = rate * (this.at(\freq) ? 60.midicps) / (60.midicps);
 			rate = rate * buf.sampleRate / Server.default.sampleRate;
 
 			case
-			{ (fit = (dict.at(\fit) ? 0)) > 0 }
+			{ (fit = (this.at(\fit) ? 0)) > 0 }
 			{
 				// stretch or shrink the step
 				if(delta > 0) { delta = delta * fit }; // "n [0,2,4]"
@@ -724,14 +774,14 @@ JSTidyStep {
 				// stretch or shrink the sample to fit inside it
 				rate = rate * bufbeats / sustain;
 			}
-			{ (stretch = (dict.at(\stretch) ? 0)) > 0 }
+			{ (stretch = (this.at(\stretch) ? 0)) > 0 }
 			{
 				// stretch or shrink the step to match the sample
 				if(delta > 0) { delta = bufbeats * stretch }; //"n [0,2,4]"
 				sustain = bufbeats * stretch;
 			}
 			// if bufbeats > sustain, then the sample will be cut short
-			{ (dict.at(\crop) ? 0) > 0 } { }
+			{ (this.at(\crop) ? 0) > 0 } { }
 
 			// default: delta remains what it is, sustain is adapted
 			// so that the whole sample can play out during the step
@@ -739,7 +789,7 @@ JSTidyStep {
 
 			dict.put(\sustainbeats, sustain);
 		};
-		
+
 		this.set_freq(name);
 		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
 
@@ -750,15 +800,19 @@ JSTidyStep {
 		def = def.asSymbol;
 		dict.put(\def, def); // also for logging
 
-		dict.at(\speed) !? { |speed| rate = rate * speed };
+		this.at(\speed) !? { |speed| rate = rate * speed };
 		dict.put(\rate, rate);
 
 		// sustain is overrideable in seconds (for percussive synths)
-		dict.at(\sustain) ?? { dict.put(\sustain, sustain/tempo) }; //secs
+		this.at(\sustain) ?? { dict.put(\sustain, sustain/tempo) }; //secs
 		sustain = dict.at(\sustain) * tempo; // beats
 		
 		this.put_sends;
 
+		dict.keysValuesDo({ |k,v|
+			if(v.class == Bus) { dict.put(k, v.asMap) }
+		});
+		
 		Routine({
 			var synth, ms;
 
@@ -769,7 +823,7 @@ JSTidyStep {
 				var beats = (ms.clip(0, 20) / 1000 * tempo);
 				beats.wait;
 			};
-			
+
 			JSTidy.postprocessors.do { |p| p.(dict) };
 			Server.default.bind { synth = Synth(def, dict.asPairs) };
 			sustain.wait;
@@ -780,15 +834,16 @@ JSTidyStep {
 	set_freq { |name|
 		var bus, synth, scale;
 
-		scale = Scale.at((dict.at(\scale) ? \major).asSymbol);
+		scale = dict.at(\scale) ? JSTidy.scale ? \major;
+		scale = Scale.at(scale.asSymbol) ? Scale.major;
 
-		dict.at(\freq) ?? {
+		this.at(\freq) ?? {
 			var steps = 12;
-			var mtranspose = dict.at(\mtranspose) ? 0;
-			var degree = (dict.at(\note) ? 0).asFloat;
+			var mtranspose = this.at(\mtranspose) ? 0;
+			var degree = (this.at(\note) ? 0).asFloat;
 			var gtranspose = 0;
-			var root = dict.at(\root) ? 0;
-			var oct = dict.at(\octave) ? 5;
+			var root = this.at(\root) ? 0;
+			var oct = this.at(\octave) ? 5;
 
 			var note = (degree + mtranspose).degreeToKey(scale, steps);
 			// midi is the midinote (continuous intermediate values)
@@ -797,12 +852,14 @@ JSTidyStep {
 			var harmonic = 1.0;
 			var detune = 0;
 
-			dict.at(\midinote) !? { midi = dict.at(\midinote) };
+			this.at(\midinote) !? { midi = this.at(\midinote) };
 			dict.put(
 				\freq,
 				(midi + ctranspose).midicps * harmonic + detune
 			);
 		};
+
+		dict.put(\freqmul, JSTidy.freqmul); // 1 or a \cxxx symbol
 	}
 
 	play_midinote {
@@ -810,7 +867,7 @@ JSTidyStep {
 			Library.at(\tidy, \midiout).noteOn(
 				chan,
 				dict.at(\freq).cpsmidi.asInteger,
-				(dict.at(\vel) ? 0.5).linlin(0, 1, 0, 127)
+				(this.at(\vel) ? 0.5).linlin(0, 1, 0, 127)
 			);
 			^true;
 		};
@@ -821,7 +878,7 @@ JSTidyStep {
 	put_sends {
 		var mix, send=1;
 
-		mix = this.at(\mix) ? "f";
+		mix = dict.at(\mix) ? "f";
 		mix.do { |gain, i|
 			Library.at(\tidyar, i.asSymbol, \bus) !? { |bus|
 				gain = gain.digit.linlin(0, 15, 0, 1).asFloat;
@@ -836,7 +893,7 @@ JSTidyStep {
 		if(JSTidy.should_log(\step)) {
 			this.postln;
 		} {
-			if((this.at(\log) ? 0) > 0) {
+			if((dict.at(\log) ? 0) > 0) {
 				this.postln;
 			}
 		}
@@ -968,8 +1025,8 @@ JSTidyCombLeft : JSTidyNode {
 			
 			// combine the values for the keys
 			keys.do { |key|
-				var stepval = step.at(key);
-				var otherval = other.at(key);
+				var stepval = step.dict.at(key);
+				var otherval = other.dict.at(key);
 				
 				case
 				{ stepval.isNil } { step.put(key, otherval) }
@@ -977,7 +1034,15 @@ JSTidyCombLeft : JSTidyNode {
 				// now we know that both are not nil..
 				{ val == ">" } { step.put(key, otherval) }
 				{ val == "<" } { }
-				{ val == "+" } { step.put(key, stepval + otherval) }
+				{ val == "+" } {
+					if(stepval.class == Bus) {
+						stepval = stepval.getSynchronous;
+					};
+					if(otherval.class == Bus) {
+						otherval = otherval.getSynchronous;
+					};
+					step.put(key, stepval + otherval)
+				}
 				{ val == "*" } { step.put(key, stepval * otherval) }
 				{ val == "/" } {
 					if(otherval == 0) {
@@ -987,66 +1052,6 @@ JSTidyCombLeft : JSTidyNode {
 					}
 				}
 				{ val == "%" } { step.put(key, stepval % otherval) }
-				{ }
-			};
-			
-			time = time + step.delta;
-		};
-
-		^cycle;
-	}
-}
-
-
-// (cycle) |> (child), (/+*%<>)
-//
-JSTidyCombLeftDepr : JSTidyNode {
-	get { |cycle, name|
-		var time, child = children.first.get(cycle, name);
-
-		time = 0;
-		cycle.steps.do { |step|
-			var other, keys;
-
-			other = child.at(time);
-
-			// collect all keys from both sides
-			keys = step.dict.keys;
-			other.dict.keys.do { |key| keys.add(key) };
-			
-			// combine the values for the keys
-			keys.do { |key|
-				case
-				{ val == ">" }
-				{ step.put(key, other.at(key) ? step.at(key)) }
-				{ val == "<" }
-				{ step.put(key, step.at(key) ? other.at(key)) }
-				{ val == "+" }
-				{
-					var stepval = step.at(key);
-					var otherval = other.at(key);
-					
-					// string or number type?
-					if((stepval.isString) or: (otherval.isString)) {
-						step.put(key, (stepval ? "") ++ (otherval ? ""));
-					} {
-						step.put(key, (stepval ? 0) + (otherval ? 0));
-					}
-				}
-				//{ step.put(key, (step.at(key) ? 0) + (other.at(key) ? 0)) }
-				{ val == "*" }
-				{ step.put(key, (step.at(key) ? 1) * (other.at(key) ? 1)) }
-				{ val == "/" }
-				{
-					var value = (other.at(key) ? 0);
-					if(value == 0) {
-						step.put(key, 0) // division by zero
-					} {
-						step.put(key, (step.at(key) ? 0) / value)
-					};
-				}
-				{ val == "%" }
-				{ step.put(key, (step.at(key) ? 0) % (other.at(key) ? 0)) }
 				{ }
 			};
 			
@@ -1074,8 +1079,8 @@ JSTidyCombRight : JSTidyNode {
 			other.dict.keys.do { |key| keys.add(key) };
 			
 			keys.do { |key|
-				var stepval = step.at(key);
-				var otherval = other.at(key);
+				var stepval = step.dict.at(key);
+				var otherval = other.dict.at(key);
 				
 				case
 				{ stepval.isNil } { step.put(key, otherval) }
@@ -1479,7 +1484,6 @@ JSTidyFP_Slice : JSTidyNode {
 		^instance;
 	}
 
-	// todo: could use GrainIn to fit sample without pitch change
 	get { |cycle, name|
 		cycle = children.first.get(JSTidyCycle.new, name);
 		
@@ -1623,13 +1627,10 @@ JSTidyFP : JSTidyNode {
 		cycle.steps.do { |step|
 			step.at(\str) !? { |str|
 				if(str[0] == $=) {
-					// "=xxx" means "map controlbus xxx for this param"
+					// "=xxx" : value comes from the controlbus of xxx
 					var bus;
 					bus = Library.at(\tidykr, str.drop(1).asSymbol, \bus);
-					bus !? { step.put(val.asSymbol, bus.asMap) }
-					// a synthdef understands \c2 as arg, but inside
-					// tidy logic, we must detect \c2 and get the
-					// value from the controlbus ourselves.
+					bus !? { step.put(val.asSymbol, bus) }
 				} {
 					// interpret str depending on the function name (val)
 					case
@@ -2046,6 +2047,31 @@ JSTidyFX {
 
 	audit { |bank| if(this == \tidy) { JSTidy.audit(bank) } }
 
+	scales {
+		if(this == \tidy) {
+			var len=0;
+			"".padLeft(40, "-").postln;
+			Scale.names.sort.do { |name|
+				name = name.asString;
+				if((name.size + len) > 40) { len=0; "".postln };
+				len = name.size + len;
+				"% - ".format(name).post;
+			};
+			"".postln;
+			"".padLeft(40, "-").postln;
+		}
+	}
+
+	scale { |name|
+		if(this == \tidy) {
+			if(Scale.at(name.asSymbol).isNil) {
+				JSTidy.scale = nil;
+			} {
+				JSTidy.scale = name.asSymbol;
+			}
+		}
+	}
+	
 	sample { |bank, index|
 		if(this == \tidy) {
 			^Library.at(\samples, bank.asSymbol, index)
