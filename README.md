@@ -1,37 +1,34 @@
 # Tidy
 Tidal Cycles syntax for SuperCollider
 
-Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I like the syntax and "tidyness" of Tidal Cycles a lot, but i want to use it in SuperCollider and be able to add/change things myself, without having to learn Haskell from scratch..
+Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I like the syntax and "tidyness" of Tidal Cycles a lot, but i want to use it in SuperCollider and be able to add/change things myself, without having to learn Haskell from scratch.
 
-First i wrote a mini-notation parser, JSMini, and this resulted in the Pmini quark, where you can use mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, so you need to install the Pmini quark if you wish to install the Tidy quark.
+First i wrote a mini-notation parser, JSMini, and this resulted in the "Pmini" quark, where you can use mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, so you need to install the Pmini quark if you wish to install the Tidy quark.
 
 ## Usage example
 
 ```
-s.boot // or a more robuust setup with a limiter in it..
+s.boot // or a more robuust setup with a limiter in it.
 
 // config
-\tidy .load("~/samples") .bpm(70) .quant(4)
+\tidy .load("~/samples") .cps(70) .quant(4)
 
-// setup some buses to write to
-\out  .fx { |in, gain| In.ar(in, 2) * gain } .play(0, 1)
-\room .fx(\eliverb) .play(\out, 0.5, [decay: 1])
+// setup (stereo fx) buses to write signal to
+\0 -- [0, \id]
+\1 -- [\0, \eliverb, [decay: 1], 0.5]
 
-// write to them
-\k -- "buf 2" - "snd kick" - "out 0.2"
-\s -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "out 0.2" - "room 0.02"
-\a -- "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "out 0.02" - "room 0.02" - "legato 2"
+// generate signal
+\k -- "buf 2" - "snd kick" - "gain 0.2"
+\s -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "gain 0.2" - "mix f4"
+\a -- "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "gain 0.02" - "mix f2" - "leg 2"
 
 // fade out
 \tidy .end(8)
 ```
 
-## Video examples
+## Video demo's
 
-Quality of the videos will improve as i make more of them. Trying to keep them lean and mean.
-
-- [tidy experiments 1: first rhythm and sound](https://youtu.be/M7O0CmNMQGI)
-- [tidy experiments 2: the rec and play function](https://youtu.be/IzgYc9P942E)
+On youtube, search for "supercollider tidy". Quality of the videos will improve as i make more of them. Trying to keep them lean and mean.
 
 ## Samples
 
@@ -41,7 +38,7 @@ Quality of the videos will improve as i make more of them. Trying to keep them l
 This will load samples from folder "~/mysamples". Tidy uses the "standardizePath" function to convert the given path to an absolute path, where the samples you want to use can be found.
 
 The "mysamples" folder is expected to have subfolders, each containing WAV files.  
-Subfolders usually have names like "kick", "snare", etc but can have any name.
+Subfolders usually have names like "bd", "sn", etc but can have any name.
 
 The WAV files "~/mysamples/animals/*.wav" for example will be stored (in Buffer objects) in global Library storage:
 
@@ -51,32 +48,50 @@ Library.at(\samples, \animals, index)
 
 The ```\samples``` symbol is hard-coded, the ```\animals``` symbol is the name of the folder containing the samples and the ```index``` is just a numerical index starting from 0.
 
-## the Mix
+## declaring effects
 
-With the ".fx" method on the "\tidy" symbol, you can define an audio rate Bus with a Synth attached to it, which reads the signal from the bus, processes it, and sends it to another bus (which can be 0, the hardware output bus).
-```
-\out  .fx { |in, gain| In.ar(in, 2) * gain } .play(0, 1)
-```
+In Tidy, the symbols ```\0```, ```\1```, .. ```\9``` are reserved for stereo effects. Each effect has it's own stereo input bus where others may write audio signals to.
 
-The ".fx" function on the Symbol class receives a Function argument. The function (defined between the "{}" brackets) expects 2 arguments: the index of a bus to read signal from, and a gain. The function above does nothing special with the signal, just reads it from the given input bus, multiplies it with the gain and returns the resulting signal.
+Declaring an effect goed like this:
 
-The result of the ".fx" function, called with a Function as argument, is an object that understands the ".play" method. This method needs 2 arguments: the index of a bus to write the signal to, or the name of an earlier defined fx bus. The second argument is again the gain.
+```\0 -- [<output>, <synthdef>, <params>, <gain>, <target>]```
 
-The ".play" method creates a Synth from the function and it makes this synth write its output to the given output bus. The gain is passed into the synth function as a parameter (the second parameter of the function).
+The ```<output>``` can be an integer number, interpreted as an audio bus index, or the symbol of an earlier declared effect, in which case the input bus of that effect will be the output bus for this effect.
 
-The function that you supply can also be a bit more complicated:
-```
-\comb .fx { |in, gain| CombL.ar(In.ar(in, 2), 0.2, 0.2, 1.0) * gain } .play(\out, 0.5)
-```
-This function reads the input signal, processes it with the CombL Ugen and plays the resulting signal to the \out fx bus that was defined earlier. So if you send signal to the \comb bus, then the CombL effect is applied and then it is sent through to the \out bus.
+The ```<synthdef>``` is the name of the synthdef to use (stereo in/out).
 
-Instead of a Function object, you can also supply the name of a SynthDef that you have created.
+The ```<params>``` is an optional array holding parameters for the effect synth.
 
-```
-\room .fx(\eliverb) .play(\out, 0.5, [decay: 1])
-```
+The ```<gain>``` is an optional gain (default 1.0) with which effect will use when writing to its output bus.
 
-In this case, the SynthDef is named "eliverb", it is played to the \out bus with a gain of 0.5. After the gain, you can include an array of key/value pairs that will be arguments to the SynthDef. This also works if you defined a Function that uses arguments inside its function body.
+The ```<target>``` is an optional symbol of a declared effect. The synth for this effect will be added before the target synth in the node tree. Without a target, the synth for the effect will be added at the tail of the default group.
+
+Usually, there is one effect always present:
+
+```\0 -- [0, \id]```
+
+The ```\id``` synthdef just copies its input to its output. This effect synth will write to hardware bus index 0 with a gain of 1.0.
+
+And then you can do:
+
+```\1 -- [\0, \tank, [decay: 4]]```
+
+The ```\tank``` effect will write to the input bus of the ```\id``` effect, and it has a decay parameter supplied.
+
+In total you can have 9 effects (because without the ```\0``` effect you will hear nothing). You can make a cascade of effects or let them all just write to hardware output. Or something in between.
+
+The ```<synthdef>``` symbol may also be a function:
+
+
+```\4 -- [\0, { |in, gain| CombL.ar(In.ar(in, 2), 0.2, 0.2, 1.0) * gain }]```
+
+This function reads the input signal, processes it with the CombL Ugen and plays the resulting signal to the \0 effect bus that was defined earlier. So if you send signal to the \4 bus, then the CombL effect is applied and then it is sent through to the \0 bus.
+
+## sending signal to the effects
+
+Using the "mix" function, you can send the signal to the declared effects. The mix function needs a hexadecimal number, and each digit of that number corresponds to a declared effect. So in ```- "mix f004" -```, the full signal will be sent to effect ```\0```, and a quarter of the signal is sent to effect ```\3```.
+ 
+The mix function is patternable like any other: ```- "mix <f004 0800>" -```.
 
 ### Order of execution
 
@@ -100,9 +115,9 @@ When adding Synths (effects as well as triggered notes) Tidy always uses "addToH
 
 AddToHead is a good default choice: all triggered notes will always be able to be processed by the fx Synths that exist for a longer time in the server, and thus always end up at the bottom of the stack of nodes.
 
-If you want the \room effect to write to the \out effect, then you must define the \out effect BEFORE the \room effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, i added a fourth argument "target" to the .play method. If you supply a target, then addBefore will be used with that target. So if \out sits on top of \room, then re-add \room with target \out to correct the situation.
+If you want the \1 effect to write to the \0 effect, then you must define the \0 effect BEFORE the \1 effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, i added a "target" argument. If you supply a target, then addBefore will be used with that target. So if \0 sits on top of \1, then re-add \1 with target \0 to correct the situation.
 
-When re-adding the \room effect, it is assumed that the synthdef has a "gate" argument, and an envelope that fades in and out by some amount of seconds. This way, the old \room synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible. This is convenient if you want to re-add an effect to change some parameters for it.
+When re-adding an effect, it is assumed that the synthdef has a "gate" argument, and an envelope that fades in and out by some amount of seconds. This way, the old effect synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible. This is convenient if you want to re-add an effect to change some parameters for it.
 
 ## Sequencing
 
