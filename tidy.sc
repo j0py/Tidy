@@ -1,23 +1,49 @@
-// JSTidy using Track objects: to spread code over classes instead of 1 big
 
 JSTidy {
-	classvar <>freqmul=1, <>scalename, <>root, <>log=0;
-	
+	classvar <>freqmul=1, <>scalename, <>root, <>log=0, <mainloop, <tracks;
+
 	var <>name, <tree, cur;
 
+	*initClass { tracks = Dictionary.new; }
+	
 	*new { |name| ^super.new.name_(name) }
 
 	*scale { |name| scalename = name !? { name.asSymbol } ?? nil }
 
 	*scales { JSUtil.postlist(Scale.names.sort) }
 
+	printOn { |stream|
+		// if tree is nil then something has gone wrong while creating it
+		// in that case: stop here, so that the old tree will keep going.
+		tree ?? { "tree nil".postln; ^this };
+
+		if(JSTidy.log == \tree) { tree.log };
+
+		name.printOn(stream);
+
+		tracks.atFailPut(name, { JSTrack.new(name) }).put(tree);
+
+		mainloop ?? {
+			mainloop = Routine({
+				loop {
+					tracks.do({ |track| track.play_next_cycle });
+					1.wait
+				}
+			}).play;
+		};
+	}
+
+	*hush { |name, seconds=0|
+		tracks[name.asSymbol] !? { |track| track.hush(seconds) }
+	}
+
 	*end { |seconds=0|
 		seconds = max(0.2, seconds); // no plopping please
 
-		JSLoop.instance.end(seconds); // stop sequencers
+		tracks.do { |track| track.hush(seconds) };
 
 		Routine({
-			(seconds * TempoClock.tempo).wait; // wait for sequencers
+			(seconds * TempoClock.tempo).wait; // await the tracks
 
 			// stop kr synths (control values)
 			Library.at(\tidykr) !? { |dict|
@@ -62,6 +88,10 @@ JSTidy {
 					};
 				};
 			};
+
+			// todo: kill running audio synths
+			
+			"*** ended ***".postln;
 		}).play;
 	}
 	
@@ -149,8 +179,9 @@ JSTidy {
 		var soloed = Library.at(\tidy, \soloed) ? Set.new;
 		var muted = Library.at(\tidy, \muted) ? Set.new;
 
-		JSLoop.instance.set_mute_bus;
-
+		//JSLoop.instance.set_mute_bus;
+		tracks.do { |track| track.set_mute_bus };
+		
 		^"soloed %, muted %".format(soloed.as(Array), muted.as(Array));
 	}
 
@@ -260,20 +291,9 @@ JSTidy {
 	% {  |str| this.add(JSTidyCombBoth("%").add(this.func(str))) }
 	|% { |str| this.add(JSTidyCombLeft("%").add(this.func(str))) }
 	%| { |str| this.add(JSTidyCombRight("%").add(this.func(str))) }
-
-	printOn { |stream|
-		// if tree is nil then something has gone wrong while creating it
-		// in that case: stop here, so that the old tree will keep going.
-		tree ?? { "tree nil".postln; ^this };
-
-		if(JSTidy.log == \tree) { tree.log };
-
-		name.printOn(stream);  // output to postwindow
-
-		JSLoop.instance.put(name, tree);
-	}
 }
 
+/*
 JSLoop {
 	classvar singleton;
 
@@ -288,7 +308,7 @@ JSLoop {
 		routine = Routine({
 			loop {
 				tracks.do({ |track|
-					if(track.hushed.not) {
+					if((track.hushed.not) and: (track.once.not)) {
 						Routine({ track.play_next_cycle }).play
 					};
 				});
@@ -317,8 +337,8 @@ JSLoop {
 	hush { |name, sec=0| tracks[name.asSymbol] !? { |t| t.hush(sec) } }
 
 	set_mute_bus { tracks.do { |track| track.set_mute_bus } }
-	
-	pr_quantize_wait { |shorter=0|
+
+	depr_pr_quantize_wait { |shorter=0|
 		var now, quant, wait;
 		
 		now = thisThread.beats;
@@ -328,12 +348,13 @@ JSLoop {
 		wait.wait;
 	}
 }
+*/
 
 JSTrack {
 	var <>name, <>prevfreq;
 	var <gain_bus, gain_routine, last_gain, gain_synth;
 	var <mute_bus, last_mute, queue, tree, newtree;
-	var <hushed=false, hushing=false;
+	var <hushed=false, hushing=false, <once=false;
 
 	*new { |name| ^super.new.name_(name).init }
 
@@ -343,6 +364,7 @@ JSTrack {
 	}
 
 	put { |atree|
+		once = false;
 		newtree = atree;
 		tree = tree ? newtree;
 		hushed = false;
@@ -352,40 +374,46 @@ JSTrack {
 	play_next_cycle {
 		var steps = [], delta = 1;
 
-		tree = newtree;
-		queue = queue ? List.new;
+		if(hushed) { ^this };
+		if(once) { ^this };
 		
-		while { delta > 0.0001 } {
-			var step, clone, slow;
-
-			if(queue.size <= 0) { this.add_to_queue(tree) };
-
-			step = queue.removeAt(0);
-			slow = step.dict.removeAt(\slow) ? 1;
-			slow = slow / (step.dict.removeAt(\fast) ? 1);
-			step.delta = step.delta * slow;
-			step.dur = step.dur * slow;
+		Routine({
+			tree = newtree;
+			queue = queue ? List.new;
 			
-			if(delta >= step.delta) {
-				delta = delta - step.delta;
-			} {
-				// insert a rest step at head of the queue
-				queue.insert(0, JSTidyStep.rest(step.delta - delta));
-				step.delta = delta;
-				delta = 0;
+			while { delta > 0.0001 } {
+				var step, clone, slow;
+
+				if(queue.size <= 0) { this.add_to_queue(tree) };
+
+				step = queue.removeAt(0);
+				slow = step.dict.removeAt(\slow) ? 1;
+				slow = slow / (step.dict.removeAt(\fast) ? 1);
+				step.delta = step.delta * slow;
+				step.dur = step.dur * slow;
+				
+				if(delta >= step.delta) {
+					delta = delta - step.delta;
+				} {
+					// insert a rest step at head of the queue
+					queue.insert(0, JSTidyStep.rest(step.delta - delta));
+					step.delta = delta;
+					delta = 0;
+				};
+
+				steps = steps.add(step);
 			};
 
-			steps = steps.add(step);
-		};
-
-		steps.do({ |step|
-			// trigger the step
-			step.put(\prevfreq, prevfreq);
-			step.play(name, this);
-			step.log;
-			prevfreq = step.at(\freq);
-			step.delta.wait;
-		});
+			steps.do({ |step|
+				// play the step
+				step.put(\prevfreq, prevfreq);
+				step.play(name, this);
+				step.log;
+				step.at(\once) !? { once = true; "once".postln };
+				prevfreq = step.at(\freq);
+				step.delta.wait;
+			});
+		}).play;
 	}
 
 	add_to_queue { |tree|
@@ -406,6 +434,7 @@ JSTrack {
 			hushed = true;
 			queue = List.new;
 			last_gain = nil;
+			// .. and kill all the synths too!
 		}).play;
 	}
 
@@ -649,7 +678,7 @@ JSTidyStep {
 			dict.put(\sustainbeats, sustain);
 		};
 
-		this.set_freq(name);
+		this.set_freq;
 		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
 
 		if(this.play_midinote) { ^this };
@@ -675,7 +704,6 @@ JSTidyStep {
 		Routine({
 			var synth, ms;
 
-			// why on earth does this stop the sound????
 			ms = (dict.at(\late) ? 0).asFloat;
 
 			if(ms > 0) {
@@ -689,7 +717,7 @@ JSTidyStep {
 		}).play;
 	}
 
-	set_freq { |name|
+	set_freq {
 		var bus, synth, scale;
 
 		scale = dict.at(\scale) ? JSTidy.scalename ? \major;
@@ -1786,7 +1814,7 @@ JSTidyFX {
 		var in, node, old, addAction, server;
 
 		server = Server.default;
-		gain = gain.asFloat.clip(0, 1);
+		gain = gain.clip(0, 1); // gain can be a value from a cv bus too
 		args = args ? [];
 		
 		Routine({
@@ -1819,6 +1847,10 @@ JSTidyFX {
 					}
 				};
 				
+				if(((i % 2) == 1).and(el.class == Bus)) {
+					result = el.asMap;
+				};
+
 				if(((i % 2) == 1).and(el.class == Symbol)) {
 					Library.at(\tidykr, el, \bus) !? { |bus|
 						result = bus.asMap;
@@ -1879,6 +1911,16 @@ JSTidyFX {
 // HOOKS
 /////////////////////////////////////////////////////
 
++ Dictionary {
+	atFailPut { |key, func|
+		var value = this.at(key);
+		value !? { ^value };
+		value = func.value;
+		this.put(key, value);
+		^value;
+	}
+}
+
 + Symbol {
 
 	// if JSTidy implements it, then call it
@@ -1929,6 +1971,7 @@ JSTidyFX {
 
 	defs { if(this == \tidy) { JSDefs.defs } }
 	samples { |bank| if(this == \tidy) { JSUtil.samples(bank) } }
+	audit { |bank| if(this == \tidy) { JSUtil.audit(bank) } }
 
 	setup { |cps, scd|
 		if(this == \tidy) {
@@ -1997,7 +2040,8 @@ JSTidyFX {
 	}
 
 	// (temporarily) shutup the track which has my value as name
-	hush { |seconds=1| JSLoop.instance.hush(this, seconds) }
+	//hush { |seconds=0.2| JSLoop.instance.hush(this, seconds) }
+	hush { |seconds=0.2| JSTidy.hush(this, seconds) }
 
 	mute { ^JSTidy.mute(this) }
 	solo { ^JSTidy.solo(this) }
@@ -2012,7 +2056,8 @@ JSTidyFX {
 		{ (0..9).collect(_.asSymbol).includes(this) }
 		{
 			if((in.class == Array) and: (in.size >= 2)) {
-				^JSTidyFX(this,in[1]).play(in[0], in[3]?1, in[2]?[], in[4])
+				^JSTidyFX(this, in[1])
+				.play(in[0], in[3] ? 1, in[2] ? [], in[4])
 			};
 		
 			^"%% -- [out, func/def, [], gain, target]".format("\\", this);
@@ -2050,7 +2095,6 @@ JSTidyFX {
 					Library.put(\tidykr, this, \bus, bus);
 				};
 
-				// keep em in a classvar?
 				node = Library.at(\tidykr, this, \synth);
 
 				server.bind {
@@ -2078,7 +2122,7 @@ JSTidyFX {
 	}
 
 	bus { ^Library.at(\tidykr, this, \bus) }
-
+	
 	rec { |name, cycles, bus=2, nudge=(-0.25)|
 		if(this != \tidy) { ^super.rec };
 		
