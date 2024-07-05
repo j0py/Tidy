@@ -1,5 +1,6 @@
 // control cv buses are still not easy to use
-// \x -- "cv sine 0.2 -1 1" could do it, or just "sine 0.2 -1 1"
+// \x -- { SinOsc.kr(0.2).range(0.3, 0.7) }
+// \x -- "cv sine 0.2 0.3 0.7" could do it, or just "sine 0.2 0.3 0.7"
 // then why not also:
 // \a -- "s bd" - "amp sine 0.2 0.3 0.7"
 // could create control bus under key "a_amp"
@@ -31,13 +32,12 @@ JSTidy {
 				var cycle_number = 0;
 				JSTidy.quantize;
 				loop {
-					//"mainloop thread %".format(thisThread.hash).postln;
-					//thisThread.randSeed = 199;
-					// first let control cycles set values on the
-					// various control buses. then let the audio cycles
-					// use these values to generate audio.
+					// control cycles set values on control buses.
 					JSTidyControls.play_next_cycle(cycle_number);
+					
+					// audio cycles use these values to generate audio.
 					JSTidyTracks.play_next_cycle(cycle_number);
+					
 					cycle_number = cycle_number + 1;
 					1.wait;
 				}
@@ -65,7 +65,7 @@ JSTidy {
 	}
 
 	-- { |array|
-		var cur_is_branch;
+		//var cur_is_branch;
 
 		array.do { |jstidy|	cur.add(jstidy.tree) };
 
@@ -75,7 +75,8 @@ JSTidy {
 		};
 	}
 
-	// return JSTidyXX function. str: "<function name> <pattern>"
+	// return JSTidyXX function object.
+	// str = "<function name> <pattern>"
 	func { |str|
 		var func, pat, class;
 
@@ -93,6 +94,7 @@ JSTidy {
 		tree ?? { tree = cur = JSTidyBranch("tree") };
 		cur.add(node);
 		node.parent = cur;
+
 		if(node.become_cur_after_add) {
 			cur = node
 		} {
@@ -248,6 +250,9 @@ JSTidyTracks : JSTidyAbstractIdentityDictionary {
 	// this is done by using the value of the mute_bus in all synthdefs
 	// as an inverted multiplier for the generated sound
 	//
+	// if \b is un-soloed, you could hear \a 's loooong note if it
+	// did not finish yet.
+	//
 	*pr_set_mute_buses {
 		muted ?? { muted = Set.new };
 		soloed ?? { soloed = Set.new };
@@ -292,13 +297,13 @@ JSTidyTrack : JSTidy {
 		mute_bus = Bus.control(Server.default, 1);
 	}
 
-	// \a -- "n 0 2 3" - etc
+	// \a -- "n 0 2 3" - etc has been evaluated in the Interpreter
 	printOn { |stream|
 		var server = Server.default;
 
 		// if tree is nil then something has gone wrong while creating it
 		// in that case: stop here, so that curtree will keep going.
-		tree ?? { "tree nil".postln; ^this };
+		tree ?? { "%: tree nil".format(name).postln; ^this };
 		if(JSTidy.log == \tree) { tree.log };
 		"%% pattern".format("\\", name).printOn(stream);
 
@@ -309,7 +314,7 @@ JSTidyTrack : JSTidy {
 		hushing = false;
 		
 		node !? {
-			//"killing ar function".postln;
+			// we are going to play a pattern, so kill playing ar function
 			server.bind { node.free };
 			node = nil
 		};
@@ -324,14 +329,13 @@ JSTidyTrack : JSTidy {
 		// how about sync/quant?
 
 		node !? {
-			//"killing ar function".postln;
+			// we are playing an ar function, so kill any playing one first
 			Server.default.bind { node.free };
 			node = nil
 		};
 
 		Server.default.bind { node = arr[1].play(nil, arr[0].bus.index) };
 
-		//"node %".format(node).postln;
 		^"%% function".format("\\", name);
 	}
 
@@ -379,7 +383,6 @@ JSTidyTrack : JSTidy {
 				step.log;
 				step.at(\once) !? { once = true; "once".postln };
 				prevfreq = step.at(\freq) ? prevfreq;
-				//(prevfreq.cpsmidi).debug("prevfreq");
 				step.delta.wait;
 			});
 		}).play;
@@ -421,10 +424,10 @@ JSTidyTrack : JSTidy {
 		this.pr_set_gain(gain, max(0.02, step.at(\gainsec) ? 0));
 	}
 
-	// reason for mute buses: it mutes running synths
+	// reason for mute buses: it mutes running synths.
+	// the last_mute variable is cheaper than mute_bus.getSynchronous.
 	set_mute_bus {
 		var new_mute = this.should_mute.asInteger;
-		//"% %".format(name, new_mute).postln;
 		if(new_mute == last_mute) { ^this };
 		mute_bus.setSynchronous(new_mute); // 0 or 1
 		last_mute = new_mute;
@@ -439,11 +442,6 @@ JSTidyTrack : JSTidy {
 	}
 	
 	pr_set_gain { |gain, sec=0|
-		/*
-		"% pr_set_gain(%, %) hushing:% last_gain:%".format(
-			name, gain, sec, hushing, last_gain
-		).postln;
-		*/
 		if(hushing) { ^this };
 		gain_routine !? { gain_routine.stop; gain_routine=nil };
 
@@ -479,7 +477,6 @@ JSTidyControls : JSTidyAbstractIdentityDictionary {
 		// stop any pattern that is writing values on my control bus
 		this.objects.at(key.asSymbol) !? { |control|
 			control.end(0);
-			//this.objects.put(key.asSymbol, nil);
 		};
 
 		// play the function to write to my control bus
@@ -811,6 +808,11 @@ JSTidyStep {
 		.put(\num, num);
 	}
 
+	*copy { |step|
+		^JSTidyStep(step.trig, step.delta, step.dur, "", 0)
+		.dict_(Dictionary.newFrom(step.dict));
+	}
+	
 	*rest { |delta|	^JSTidyStep(0, delta, delta, "~", 0) }
 	
 	putAll { |argdict| dict.putAll(argdict) }
@@ -866,8 +868,8 @@ JSTidyStep {
 		// we should do: 1 cycle = 1 bar = 4 beats (usually)
 		
 		// at the moment we do: 1 cycle == 1 TempoClock beat == 1 bar
-		// all synthdefs will have their gate shut after sustain beats
-		// all synthdefs will receive sustain arg in seconds
+		// all synths will have their gate shut after sustain beats
+		// all synths will receive sustain arg in seconds
 		tempo = TempoClock.tempo;
 
 		// the RandID determines which random number generator is used.
@@ -1239,6 +1241,27 @@ JSTidyDefs {
 			var val = In.kr(bus, 1);
 			val = Env([val, val, target], [0, fadetime]).kr(2, t_trig);
 			ReplaceOut.kr(bus, val);
+		}).add;
+
+		SynthDef(\mic, {
+			var bufnum = \buf.kr(0);
+			var in = In.ar(\in.kr(0), 2);
+
+			// make mono to use it with grainbuf / tgrains
+			in = [in.sum];
+			
+			// highpass to avoid mic rumble
+			in = HPF.ar(in, 200);
+			in = HPF.ar(in, 100);
+			in = LeakDC.ar(in);
+			
+			RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
+		}).add;
+
+		SynthDef(\rec, {
+			var bufnum = \buf.kr(0);
+			var in = In.ar(\in.kr(0), 2);
+			RecordBuf.ar([in.sum], bufnum, loop: 0, doneAction: 2);
 		}).add;
 
 		JSTidyDefs.def(\tidy_pb_2, {
@@ -1745,8 +1768,8 @@ JSTidyPattern : JSTidyNode {
 	var seq;
 
 	get { |cycle, name|
-		seq = seq ? JSMiniParser(val).parse; // lazy instantiate
-		^JSTidyCycle(seq.next_cycle);
+		seq = seq ? JSMNPattern(val); // lazy instantiate
+		^JSTidyCycle(seq.steps);
 	}
 }
 
@@ -1916,7 +1939,7 @@ JSTidyFP_Jux : JSTidyNode {
 	}
 }
 
-// ~a < "off 0.25" |+ "n 7" | ..
+// \a -- "off 0.25" |+ "n 7" | ..
 // add timeshifted, altered layer
 // todo: the shift time should be patternable (e.g. "off <0.25 0.375>" - bla bla)
 JSTidyFP_Off : JSTidyNode {
@@ -2068,51 +2091,141 @@ JSTidyFP_Hex : JSTidyNode {
 }
 
 // chop all steps in N identical shorter steps
+// \a -- "chop <2 4>" | "n 0 2 3" - "d haha"
+// must use PriorityQueue for \a -- "chop 2" | "s bd [sn,hh]"
 JSTidyFP_Chop : JSTidyNode {
 
 	*new { |pattern|
-		var instance = super.new("chop");
-		pattern = (pattern ? "1");
-		if(pattern.size <= 0) { pattern = "1" };
-		instance.add(JSTidyPattern(pattern));
-		^instance;
+		^super.new("chop").add(JSTidyPattern(pattern ? "1"))
 	}
 
-	get { |cycle, name|
-		var steps = List.new;
-		var pattern = children.first.get(JSTidyCycle.new, name);
-		var time = 0;
+	become_cur_after_add { ^true }
 
-		cycle.steps.do { |step|
-			var delta, dur, chop;
-			chop = pattern.at(time).dict.at(\str).asInteger.clip(1,16);
+	// also sets begin and end control parameters
+	get_new { |cycle, name|
+		var pat, org, time, pq=PriorityQueue.new;
+
+		pat = children.first.get(JSTidyCycle.new, name); // chop cycle
+		org = children.last.get(cycle, name); // branch cycle
+
+		time = 0;
+		org.steps.do { |step|
+			var delta, dur, chop, time2;
+
+			chop = pat.at(time).dict.at(\str).asInteger.clip(1, 96);
+
+			time2 = time;
 			time = time + step.delta;
+
 			step.delta_(step.delta / chop);
 			step.dur_(step.dur / chop);
 
-			chop.do { steps.add(step) };
+			chop.do { |i|
+				var step2 = JSTidyStep.copy(step);
+				step2.put(\begin, i / chop);
+				step2.put(\end, i + 1 / chop);
+				pq.put(time2, step2);
+				time2 = time2 + step2.dur;
+			};
+
+			step.put(\legato, 1); // cut sample after dur
 		};
 
-		^JSTidyCycle.new(steps);
+		^JSTidyCycle(this.steps_from_priority_queue(pq));
+	}
+
+	// does not set begin and end control parameters
+	get { |cycle, name|
+		var pat, org, time, pq=PriorityQueue.new;
+
+		pat = children.first.get(JSTidyCycle.new, name); // chop cycle
+		org = children.last.get(cycle, name); // branch cycle
+
+		time = 0;
+		org.steps.do { |step|
+			var delta, dur, chop, time2;
+
+			chop = pat.at(time).dict.at(\str).asInteger.clip(1, 96);
+
+			time2 = time;
+			time = time + step.delta;
+
+			step.delta_(step.delta / chop);
+			step.dur_(step.dur / chop);
+
+			chop.do {
+				pq.put(time2, step);
+				time2 = time2 + step.dur;
+			}
+		};
+
+		^JSTidyCycle(this.steps_from_priority_queue(pq));
+	}
+}
+
+/*
+JSTidyFP_Loopat : JSTidyNode {
+
+	*new { |pattern|
+		^super.new("loopAt").add(JSTidyPattern(pattern ? "1"))
+	}
+
+	become_cur_after_add { ^true }
+
+	// set speed so that the steps fit perfectly in the cycle
+	get { |cycle, name|
+		var pat, org, time;
+
+		pat = children.first.get(JSTidyCycle.new, name); // loopAt cycle
+		org = children.last.get(cycle, name); // branch cycle
+
+		time = 0;
+		org.steps.do { |step|
+			var buf, loopat;
+
+			// this is also done in step.play.. should be done
+			// function JSTidy_FP should set step \buf
+			step.at(\snd) !? { |bank|
+				var index = abs((step.at(\buf) ? 1).asInteger);
+				buf = JSTidySamples.buf(bank, index);
+			};
+			
+			loopat = pat.at(time).dict.at(\str).asInteger.clip(1, 96);
+			time = time + step.delta;
+
+			buf !? {
+				var dur, speed;
+				buf.debug("buf");
+				dur = buf.duration.debug("duration") * TempoClock.tempo;
+				dur.debug("dur1");
+				dur = dur * ((step.at(\end) ? 1) - (step.at(\begin) ? 0));
+				dur.debug("dur2");
+				speed = dur / step.dur / loopat;
+				speed.debug("speed");
+				step.put(\speed, speed);
+			};
+		};
+
+		^org;
 	}
 }
 
 // chop each step in N identical smaller steps and weave them
 JSTidyFP_Striate : JSTidyNode {
+	// TODO
 	*new { |pattern|
-		var instance = super.new("striate");
-		pattern = (pattern ? "1");
-		if(pattern.size <= 0) { pattern = "1" };
-		instance.add(JSTidyPattern(pattern));
-		^instance;
+		^super.new("striate").add(JSTidyPattern(pattern ? "1"))
 	}
 
+	become_cur_after_add { ^true }
+
 	get { |cycle, name|
-		var steps = List.new;
-		var pattern = children.first.get(JSTidyCycle.new, name);
-		var size = cycle.steps.size;
+		var pat, size, steps=[];
 		
-		pattern.steps.do { |striate|
+		pat = children.first.get(JSTidyCycle.new, name);
+		size = cycle.steps.size;
+		
+		pat.steps.do { |striate|
 			var count = striate.dict.at(\str).asInteger.clip(1, 16);
 			count.do {
 				cycle.steps.do { |step|
@@ -2129,6 +2242,7 @@ JSTidyFP_Striate : JSTidyNode {
 		^JSTidyCycle.new(steps);
 	}
 }
+*/
 
 JSTidyFP : JSTidyNode {
 	*new { |val, pattern|
@@ -2408,6 +2522,8 @@ JSTidyFP : JSTidyNode {
 			if(in.isArray) {
 				^JSTidyTracks.atFail(this).run(in);
 			};
+
+			// you could play a function to a bus..
 			
 			^"%% -- <func or array>".format("\\", this);
 		}
@@ -2441,7 +2557,7 @@ JSTidyFP : JSTidyNode {
 		}
 	}
 	
-	mic { |name, cycles, nudge=0|
+	mic { |name, cycles=1, nudge=0|
 		this.rec(name, cycles, 2, nudge);
 	}
 	
@@ -2449,30 +2565,25 @@ JSTidyFP : JSTidyNode {
 		if(this != \tidy) { ^super.rec };
 		
 		Routine({
-			var seconds, buf, old, now;
+			var seconds, buf, old, now, def;
 			var server = Server.default;
 
-			SynthDef(\rec, {
-				var bufnum = \buf.kr(0);
-				var in = In.ar(\in.kr(0), 2);
-				RecordBuf.ar([in.sum], bufnum, loop: 0, doneAction: 2);
-			}).add;
-			server.sync;
-
+			case { bus == 2 } { def = \mic } { def = \rec };
+			
 			cycles = cycles.asInteger;
 			seconds = cycles / TempoClock.tempo; // 1 cycle = 1 beat
-			"rec % cycles (% seconds)".format(cycles, seconds).postln;
+			"% % cycles (% seconds)".format(def, cycles, seconds).postln;
 			buf = Buffer.alloc(server, seconds * server.sampleRate, 1);
 			server.sync;
-			"rec bufnum %".format(buf.bufnum).postln;
+			"% bufnum %".format(def, buf.bufnum).postln;
 
 			JSTidy.quantize;
 			
-			// start \rec synth 1 cycle from now + start countdown now
+			// start synth 1 cycle from now + start countdown now
 			// start synth a little later, as input signal will take some
 			// time to enter supercollider.
 			server.makeBundle(1 / TempoClock.tempo + nudge, {
-				Synth(\rec, [buf: buf, in: bus], nil, \addToTail);
+				Synth(def, [buf: buf, in: bus], nil, \addToTail);
 			});
 
 			4.do { |i| "..%".format(4 - i).postln; (1/4).wait };
@@ -2490,15 +2601,18 @@ JSTidyFP : JSTidyNode {
 		}).play;
 	}
 
-	save { |name, folder|
+	save { |name, saveasname|
 		Library.at(\tidyrec, name.asSymbol) !? { |buffer|
 			var path;
-			if(folder.endsWith(".wav")) {
-				path = folder;
-			} {
-				folder = folder.standardizePath;
-				path = folder ++ "/" ++ name ++ ".wav";
+			saveasname = saveasname ? name;
+			saveasname = saveasname.asString;
+			
+			if(saveasname.endsWith(".wav").not) {
+				saveasname = saveasname ++ ".wav";
 			};
+			
+			path = ("~/" ++ saveasname).standardizePath;
+			
 			"Writing %% to %".format("\\", name, path.quote).postln;
 			buffer.write(path, "wav");
 		};
