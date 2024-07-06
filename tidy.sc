@@ -992,7 +992,7 @@ JSTidyStep {
 		def ?? { "no def".postln; ^this };
 		def = def.asSymbol;
 		dict.put(\def, def); // also for logging
-
+		
 		dict.put(\rate, rate);
 
 		// sustain is overrideable in seconds (for percussive synths)
@@ -1021,8 +1021,10 @@ JSTidyStep {
 		};
 
 		Routine({
-			var synth, latebeats=0;
+			var synthDesc, synth, latebeats=0;
 
+			synthDesc = SynthDescLib.at(def);
+			
 			dict.at(\latemsecs) !? { |msecs|
 				latebeats = (msecs.clip(0, 40) / 1000 * tempo);
 			};
@@ -1037,7 +1039,9 @@ JSTidyStep {
 			
 			Server.default.bind { synth = Synth(def, dict.asPairs) };
 			sustain.wait;
-			Server.default.bind { synth.set(\gate, 0) };
+			if(synthDesc.hasGate and: synthDesc.canFreeSynth) {
+				Server.default.bind { synth.set(\gate, 0) };
+			}
 		}).play;
 	}
 
@@ -1768,19 +1772,20 @@ JSTidyPattern : JSTidyNode {
 	var seq;
 
 	get { |cycle, name|
-		seq = seq ? JSMNPattern(val); // lazy instantiate
+		seq ?? { seq = JSMNPattern(val) }; // lazy instantiate
 		^JSTidyCycle(seq.steps);
 	}
 }
 
 JSTidyHexPattern : JSTidyNode {
-	var seq, posted;
+	var seq;
 
 	get { |cycle, name|
 		var steps;
-		seq = seq ? JSMiniParser(val).parse; // lazy instantiate
+		seq ?? { seq = JSMNPattern(val.postln) }; // lazy instantiate
+		seq = seq ? JSMNPattern(val); // lazy instantiate
 		steps = [];
-		seq.next_cycle.do { |step|
+		seq.steps.do { |step|
 			var bits, delta, dur;
 
 			// step: [<trig>, <delta>, <dur>, <str>, <num>]
@@ -1789,12 +1794,6 @@ JSTidyHexPattern : JSTidyNode {
 				c.digit.min(15).asBinaryDigits(4)
 			}, Array).flatten;
 
-			posted ?? {
-				posted = 1;
-				bits.join.postln;
-				step.postln;
-			}; // post once
-			
 			delta = step[1] / bits.size;
 			dur = step[2] / bits.size;
 
@@ -1807,32 +1806,41 @@ JSTidyHexPattern : JSTidyNode {
 	}
 }
 
-// \a -- "s bd" - "bin <----722280080101 fcc0a123>" - "log"
-// "0" velocity 0 = a rest, "-" is a prolonged note
-// create a JSTidyBinPattern class that will create the steps
-// with the str value as input. each step will have delta,dur,trig,vel
-// \a -- "s bd" >| "bin <[----7222 80080101]!2 fcc0a123>" will work!
-
-JSTidyFP_Bin : JSTidyNode {
-	var <>pattern;
-	
-	*new { |pattern|
-		var instance = super.new("bin");
-		instance.pattern_(pattern);
-		instance.add(JSTidyPattern(pattern));
-		^instance;
-	}
+// \a -- "bin ---2--4---5" - "s sn" // = rhythm + velocity
+JSTidyBinPattern : JSTidyNode {
+	var seq;
 
 	get { |cycle, name|
-		cycle = children.first.get(cycle, name);
+		var steps;
+		seq ?? { seq = JSMNPattern(val.postln) }; // lazy instantiate
+		steps = [];
+		seq.steps.do { |step|
+			var bits, delta, dur, cur;
 
-		cycle.steps.do { |step|
-			step.at(\str) !? { |str| step.put(\bin, str) };
-			step.put(\str, nil);
-			step.put(\num, nil);
+			delta = step[1] / step[3].size;
+			dur = step[2] / step[3].size;
+
+			step[3].do { |c|
+				case
+				{ c == $- }
+				{
+					if(cur.isNil) {
+						cur = [0, delta, dur, "~", step[4]]
+					} {
+						cur[1] = cur[1] + delta;
+						cur[2] = cur[2] + delta;
+					}
+				}
+				{
+					cur !? { steps = steps.add(cur) };
+					cur = [1, delta, dur, c.digit.min(15), step[4]];
+				}
+			};
+			
+			cur !? { steps = steps.add(cur) };
 		};
 
-		^cycle;
+		^JSTidyCycle(steps);
 	}
 }
 
@@ -2082,6 +2090,30 @@ JSTidyFP_Hex : JSTidyNode {
 
 		cycle.steps.do { |step|
 			step.put(\hex, (step.at(\str) ? step.trig).asString);
+			step.put(\str, nil);
+			step.put(\num, nil);
+		};
+
+		^cycle;
+	}
+}
+
+JSTidyFP_Bin : JSTidyNode {
+
+	*new { |pattern|
+		var instance = super.new("bin");
+		if(pattern.size > 0) { instance.add(JSTidyBinPattern(pattern)) };
+		^instance;
+	}
+
+	get { |cycle, name|
+		cycle = children.first.get(cycle, name);
+
+		cycle.steps.do { |step|
+			step.put(
+				\amp,
+				(step.at(\str) ? 0).asInteger.linlin(0, 15, 0, 1)
+			);
 			step.put(\str, nil);
 			step.put(\num, nil);
 		};
