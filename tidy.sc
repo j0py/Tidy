@@ -1,3 +1,62 @@
+/*
+
+functions supported:
+
+function | status | description
+---------+--------+-------------------------------------------------
+seq        ok       play one of multiple given sequences
+
+                    \a -- "seq 0 1 1 0" -- [
+                      \-- "s bd sn" - "pan -1",
+                      \-- "s [bd bd] sn" - "vel 0.4",
+	                ] - "gain 0.3" - ... 
+
+                    1st cycle plays "s bd sn", 2nd plays "s [bd bd] sn"
+                    3rd plays "s [bd bd] sn", 4th plays "s bd sn", etc
+
+stack      ok       play multiple sequences simultaneously
+
+                    \a -- "stack" -- [
+                      \-- "s bd sn" - "pan -1",
+                      \-- "s [bd bd] sn:2" - "pan 1",
+	                ] - "gain 0.3" - ... 
+
+jux        ok
+off        ok
+rev        ok
+slice      ok
+every      ok
+hex        ok
+bin        ok
+chop       test
+loopat     test
+striate    test
+
+mini-notation supported (using the parser in Pmini quark):
+
+char | description                             | example
+-----+-----------------------------------------+--------------------
+~      Create a rest                             "~ hh"
+[ ]    Create a pattern grouping                 "[bd sd] hh"
+.      Shorthand for pattern grouping            "bd sd . hh hh hh"
+,      Play multiple patterns at the same time   "[bd sd, hh hh hh]"
+*      Repeat a pattern                          "bd*2 sd"
+/      Slow down a pattern                       "bd/2"
+|      Create a random choice                    "[bd |cp |hh]"
+< >    Alternate between patterns                "bd <sd hh cp>"
+!      Replicate a pattern                       "bd!3 sd"
+_      Elongate a pattern                        "bd _ _ ~ sd _"
+@      Elongate a pattern                        "gong@3 gong"
+?      Randomly remove events from pattern       "bd? sd"
+:      Selecting samples                         "bd:3"
+( )    Euclidean sequences                       "bd(3,8)"
+{ }    Polymetric sequences                      "{bd bd bd bd, cp cp hh}"
+{ }%   Polymetric sequence subdivision           "{bd cp hh}%8"
+
+*/
+
+
+
 // control cv buses are still not easy to use
 // \x -- { SinOsc.kr(0.2).range(0.3, 0.7) }
 // \x -- "cv sine 0.2 0.3 0.7" could do it, or just "sine 0.2 0.3 0.7"
@@ -2098,6 +2157,7 @@ JSTidyFP_Hex : JSTidyNode {
 	}
 }
 
+// \a -- "bin f---8---4-4-----" - "s bd" |* "amp 0.4"
 JSTidyFP_Bin : JSTidyNode {
 
 	*new { |pattern|
