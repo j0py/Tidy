@@ -1,9 +1,9 @@
 (
   name: "Tidy",
   summary: "Combine function/pattern pairs in SuperCollider like in Tidal Cycles.",
-  version: "1.0.3",
+  version: "1.1.0",
   schelp: "Tidy",
   dependencies: [ "Pmini" ],
   license: "GPL",
-  copyright: "Johan Stuijt, aka j0py, 2023"
+  copyright: "Johan Stuijt, aka j0py, aka NumberLoup 2024"
 )
