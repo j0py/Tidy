@@ -11,7 +11,7 @@ First i wrote a mini-notation parser, JSMini, and this resulted in the "Pmini" q
 s.boot // or a more robuust setup with a limiter in it.
 
 // config
-Tidy.setup.load("~/samples").cps(70).quant(1).bpm(110)
+Tidy.setup.load("~/samples").cps(0.3).quant(1).bpm(110)
 
 // setup (stereo fx) buses to write signal to
 \0 -- [0, \id]
