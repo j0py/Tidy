@@ -1,160 +1,604 @@
-/*
 
-functions supported:
+Tidy {
+	classvar samples, buffers, recordings, prevfreq, abbreviations;
+	classvar <>log=0;   // to (de)activate logging
 
-function | status | description
----------+--------+-------------------------------------------------
-seq        ok       play one of multiple given sequences
-
-                    \a -- "seq 0 1 1 0" -- [
-                      \-- "s bd sn" - "pan -1",
-                      \-- "s [bd bd] sn" - "vel 0.4",
-	                ] - "gain 0.3" - ... 
-
-                    1st cycle plays "s bd sn", 2nd plays "s [bd bd] sn"
-                    3rd plays "s [bd bd] sn", 4th plays "s bd sn", etc
-
-stack      ok       play multiple sequences simultaneously
-
-                    \a -- "stack" -- [
-                      \-- "s bd sn" - "pan -1",
-                      \-- "s [bd bd] sn:2" - "pan 1",
-	                ] - "gain 0.3" - ... 
-
-jux        ok
-off        ok
-rev        ok
-slice      ok
-every      ok
-hex        ok
-bin        ok
-chop       ok
-loopat     test
-striate    test
-
-mini-notation supported (using the parser in Pmini quark):
-
-char | description                             | example
------+-----------------------------------------+--------------------
-~      Create a rest                             "~ hh"
-[ ]    Create a pattern grouping                 "[bd sd] hh"
-.      Shorthand for pattern grouping            "bd sd . hh hh hh"
-,      Play multiple patterns at the same time   "[bd sd, hh hh hh]"
-*      Repeat a pattern                          "bd*2 sd"
-/      Slow down a pattern                       "bd/2"
-|      Create a random choice                    "[bd |cp |hh]"
-< >    Alternate between patterns                "bd <sd hh cp>"
-!      Replicate a pattern                       "bd!3 sd"
-_      Elongate a pattern                        "bd _ _ ~ sd _"
-@      Elongate a pattern                        "gong@3 gong"
-?      Randomly remove events from pattern       "bd? sd"
-:      Selecting samples                         "bd:3"
-( )    Euclidean sequences                       "bd(3,8)"
-{ }    Polymetric sequences                      "{bd bd bd bd, cp cp hh}"
-{ }%   Polymetric sequence subdivision           "{bd cp hh}%8"
-
-*/
-
-
-
-// control cv buses are still not easy to use
-// \x -- { SinOsc.kr(0.2).range(0.3, 0.7) }
-// \x -- "cv sine 0.2 0.3 0.7" could do it, or just "sine 0.2 0.3 0.7"
-// then why not also:
-// \a -- "s bd" - "amp sine 0.2 0.3 0.7"
-// could create control bus under key "a_amp"
-// or: Track holds the buses (already holds gain_bus and mute_bus)
-
-// 2024-04-21: BufRd for sampler?
-/*
-send MIDICLOCK to some device (24 messages per beat):
-
-1: \tidy .midiout
-2: connect midi with jack
-3: \clock -- "n 0!96" - "midiclock 1"
-*/
-
-JSPlugins {
-	classvar <>plugins;
-
-	*initClass {
-		plugins = Dictionary.new;
-
-		plugins.put(\freq, { |name, dict|
-			dict.at(\freq) ?? {
-				var e = Event.default;
-				e.putAll(dict);
-				e.use { ~f = ~freq.value };
-				dict.put(\freq, e.at(\f));
-			}
-		});
+	*abbr { |array|
+		array ?? { ^abbreviations };
+		abbreviations.putAll(array.asDict)
 	}
 	
-	*add { |key, func| plugins.put(key, func) }
+	*setup {
+		// default (overrideable) plugins and synthdefs
 
-	*alter { |name, dict|
-		plugins.asSortedArray.do { |array|
-			array[1].value(name, dict)
+		abbreviations = [
+			\d, \def,
+			\m, \map, \snd, \map, \s, \map,
+			\b, \buf,
+		].asDict;
+		
+		// FREQ
+		// n(ote) = midinote - 60
+	
+		JSPlugins.add(\freq, { |track, step|
+			case
+			{ step.at(\freq).notNil } { /* do nothing */ }
+			{ step.at(\midinote).notNil } {
+				step.put(\freq, step.at(\midinote).midicps)
+			}
+			{ step.at(\note).notNil } {
+				var note = step.at(\note);
+				var octave = (step.at(\octave) ? 4).asInteger;
+				step.put(\freq, (note + ((octave + 1) * 12)).midicps)
+			}
+			{ step.at(\scale).notNil or: step.at(\toscale).notNil } {
+				// - "scale major minor" - "degree 0 2b 4# 5" -
+				// - "toscale 0 2 4 5 7 9 11" - "degree 0 2# 4 5b" -
+				var add=0, mul=1, degree="", scale, note, octave;
+				//
+				if(step.at(\scale).notNil) {
+					scale = Scale.at(step.at(\scale).asSymbol) ? Scale.major;
+				} {
+					scale = step.at(\toscale).asArray;
+				};
+				octave = (step.at(\octave) ? 4).asInteger;
+				(step.at(\degree) ? "0").asString.do { |ch, i|
+					if(ch == $-) { mul = -1; octave = octave -1 };
+					if(ch == $#) { add = add + 1 };
+					if(ch == $b) { add = add - 1 };
+					if(".0123456789".contains(ch)) { degree = degree ++ ch };
+				};
+				degree = degree.asInteger * mul;
+				note = scale.wrapAt(degree).asInteger + add;
+				step.put(\freq, (note.asInteger + (12 * (octave + 1))).midicps)
+			}
+			{ step.put(\freq, 60.midicps) }
+		});
+
+		// needed for the glide function, but should disappear!
+		JSPlugins.add(\prevfreq, { |track, step|
+			var prevfreq = Tidy.prevfreq(track);
+			step.put(\prevfreq, prevfreq ? step.at(\freq));
+			Tidy.prevfreq(track, step.at(\freq)); 
+		});
+
+		JSPlugins.add(\sample, { |track, step|
+			var buf, rate;
+
+			rate = step.at(\rate) ? 1;
+
+			step.at(\map) !? { |map|
+				var index = (step.at(\buf) ? 1).asInteger;
+				if(index <= -1) { rate = rate * -1 };
+				buf = Tidy.sample(map, abs(index));
+				buf ?? { "buf % % unknown".format(map, index).postln };
+			};
+
+			step.at(\play) !? { |rec|
+				buf = Tidy.recordings.at(rec.asSymbol);
+				buf ?? { "rec buf % unknown".format(rec).postln };
+			};
+			
+			buf !? {
+				var s = Server.default;
+				var begin, end, legato, bufbeats, bufseconds, sustainbeats;
+
+				step.put(\bufchannels, buf.numChannels);
+				step.put(\bufnum, buf.bufnum);
+
+				rate = rate * (step.at(\speed) ? 1);
+				rate = rate * buf.sampleRate / s.sampleRate;
+				begin = step.at(\begin) ? 0;
+				end = step.at(\end) ? 1;
+
+				// calculate sustainbeats
+				bufseconds = buf.numFrames / buf.sampleRate;
+				bufseconds = bufseconds * abs(end - begin);
+				bufbeats = bufseconds * TempoClock.tempo;
+
+				legato = bufbeats / step.dur; // default: play whole sample
+				if(legato > 1) { legato = 1 }; // max step length
+				legato = step.at(\legato) ? legato; // unless overridden
+				step.put(\legato, legato);
+				sustainbeats = step.dur * legato;
+
+				// starting point in buffer for PlayBuf
+				step.put(\begin, begin);
+				if(rate < 0) { step.put(\begin, end) };
+
+				step.at(\stretch) !? { |stretch|
+					// fit step around <stretch> samples
+					if(step.delta > 0) { //"n [0,2,4]"
+						step.delta = bufbeats * stretch
+					};
+					sustainbeats = bufbeats * stretch;
+				};
+				
+				step.put(\sustainbeats, sustainbeats);
+
+				// flip: align reversed sample perfectly to the right
+				if((step.at(\flip) ? 0) > 0) {
+					if(rate > 0) { rate = rate * -1 };
+					if(bufbeats >= sustainbeats) {
+						step.put(\begin, sustainbeats / bufbeats);
+					} {
+						step.put(\begin, 1);
+						step.put(\latebeats, sustainbeats - bufbeats);
+					};
+				};
+
+				// in the synthdef, we will know the sustain in seconds
+				// this can be convenient for Lag or Env
+				step.put(\sustain, sustainbeats / TempoClock.tempo);
+			};
+			
+			step.put(\rate, rate);
+		});
+
+		// the Vowel quark could be installed, or not
+		\Vowel.asClass !? {
+			JSPlugins.add(\vowel, { |track, step|
+				step.at(\vowel) !? { |vowel|
+					vowel = vowel.asSymbol; // \a \o \e \i \u
+					Vowel.formLib.at(vowel) !? {
+						var reg = (step.at(\register) ? 0); // 0,1,2 etc
+						var regs = [
+							\bass, \tenor, \counterTenor, \alto, \soprano
+						];
+						reg = regs.at(reg.clip(0, regs.size));
+						vowel = Vowel(vowel, reg).brightenExp(3);
+						step.put(\vowel_freqs, vowel.freqs);
+						step.put(\vowel_rqs, vowel.amps); // SuperDirt..
+						step.put(\vowel_amps, vowel.amps);
+					}
+				}
+			})
+		};
+
+		JSPlugins.add(\bufnum, { |track, step|
+			if(step.has(\bufnum)) {
+				if(step.has(\def).not) {
+					step.put(\def, \playbuf1);
+					if((step[\bufchannels] ?? 1) > 1) {
+						step.put(\def, \playbuf2)
+					};
+				};
+				
+				if(step.has(\rumble)) {
+					step.put(\def, \rumble1);
+					if((step[\bufchannels] ?? 1) > 1) {
+						step.put(\def, \rumble2)
+					};
+				}
+			}
+		});
+		
+		// \a -- "def atone" - "adsr1 #0.01 0.2 0.7 900" - 
+		// will add keys to step:
+		// \adsr11 -> "0.01"
+		// \adsr12 -> "0.2"
+		// \adsr13 -> "0.7"
+		// \adsr14 -> "0.9"
+		JSPlugins.add(\adsr, { |track, step|
+			var sustain = step.at(\sustain).asFloat; // seconds
+			//
+			if(sustain > 0) {
+				step.dict.pairsDo { |k,v|
+					if(k.asString.keep(4) == "adsr") {
+						case
+						{ k.asString.keep(-1).asInteger == 3 } { } // level
+						{ v.class == Bus } { } // read from bus later
+						{ v.asFloat < 1 } {
+							// relative to sustain
+							step.put(k, v.asFloat * sustain)
+						}
+						{ step.put(k, v.asFloat / 1000) }; // msec
+					}
+				}
+			}
+		});
+
+		// define synthdefs
+		
+		SynthDef(\mic, {
+			var bufnum = \buf.kr(0);
+			var in = In.ar(\in.kr(0), 2);
+
+			// make mono to use it with grainbuf / tgrains
+			in = [in.sum];
+			
+			// highpass to avoid mic rumble
+			in = HPF.ar(in, 200);
+			in = HPF.ar(in, 100);
+			in = LeakDC.ar(in);
+			
+			RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
+		}).add;
+
+		SynthDef(\rec, {
+			var bufnum = \buf.kr(0);
+			var in = In.ar(\in.kr(0), 2);
+			RecordBuf.ar([in.sum], bufnum, loop: 0, doneAction: 2);
+		}).add;
+
+		this.def(\playbuf2, {
+			arg freq, vel, gate, sustain;
+			var sig, rate, bufnum, begin, att, rel, crv, trigger;
+			//
+			att = \att.kr(0.01);
+			rel = \rel.kr(1);
+			crv = \crv.kr(-4);
+			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
+			bufnum = \bufnum.kr(0);
+			trigger = \trigger.tr(1);
+			begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			sig = PlayBuf.ar(2, bufnum, rate, trigger, begin);
+			sig = LeakDC.ar(sig);
+			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
+			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
+		});
+		
+		this.def(\playbuf1, {
+			arg freq, vel, gate, sustain;
+			var sig, rate, bufnum, begin, att, rel, crv;
+			//
+			att = \att.kr(0.01);
+			rel = \rel.kr(1);
+			crv = \crv.kr(-4);
+			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
+			bufnum = \bufnum.kr(0);
+			begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
+			sig = LeakDC.ar(sig);
+			sig = Pan2.ar(sig, \pan.kr(0));
+			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
+		});
+
+		this.def(\rumble2, {
+			arg freq, vel, gate, sustain;
+			var sig, rate, bufnum, begin, rumble, env, delay, amount;
+			var att, rel, crv;
+			//
+			att = \att.kr(0.01);
+			rel = \rel.kr(1);
+			crv = \crv.kr(-4);
+			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
+			bufnum = \bufnum.kr(0);
+			begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
+			//
+			amount = \rumble.kr(0);
+			rumble = sig.sum * amount;
+			delay = LFNoise2.kr(0.5).range(0.27, 0.51)!6 * sustain;
+			rumble = CombL.ar(rumble, 1, delay, sustain * (1 + amount));
+			rumble = LPF.ar(rumble.sum, 22);
+			sig = LeakDC.ar(sig + (rumble!2));
+			//
+			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
+			env = Env([0, 1, 1, 0], [att, sustain, rel], crv).kr(2);
+			sig * env;
+		});
+
+		this.def(\rumble1, {
+			arg freq, vel, gate, sustain;
+			var sig, rate, bufnum, begin, rumble, env, delay, amount;
+			var att, rel, crv;
+			//
+			att = \att.kr(0.01);
+			rel = \rel.kr(1);
+			crv = \crv.kr(-4);
+			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
+			bufnum = \bufnum.kr(0);
+			begin = \begin.kr(0) * BufFrames.kr(bufnum);
+			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
+			//
+			amount = \rumble.kr(0);
+			rumble = sig * amount;
+			//
+			delay = LFNoise2.kr(0.5).range(0.27, 0.51)!6 * sustain;
+			rumble = CombL.ar(rumble, 1, delay, sustain * (1 + amount));
+			rumble = LPF.ar(rumble.sum, 22);
+			sig = LeakDC.ar(sig + rumble);
+			//
+			sig = Pan2.ar(sig);
+			env = Env([0, 1, 1, 0], [att, sustain, rel], crv).kr(2, gate);
+			sig * env;
+		});
+
+		// some default effect synthdefs
+		
+		SynthDef(\id, {
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
+			Out.ar(\out.kr(0), sig);
+		}).add;
+
+		SynthDef(\gverb, {
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			sig = GVerb.ar(sig, \roomsize.kr(10), 3, drylevel: 0);
+			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
+			Out.ar(\out.kr(0), sig);
+		}).add;
+	}
+
+	*prevfreq { |key, value|
+		prevfreq = prevfreq ? Dictionary.new;
+		value ?? { ^prevfreq.at(key) };
+		prevfreq.put(key, value);
+	}
+	
+	*postline { |w=38| "".padLeft(w+6, "-").postln }
+	
+	*postlist { |list, sep|
+		var w = 38, str = ",".ccatList(list).replace(",, ", "");
+		sep = sep ? " - ";
+		this.postline;
+		while { str.size > w } {
+			var i = w;
+			while { str[i] != $  and: (i > 0) } { i = i - 1 };
+			if(i > 0) {
+				str.keep(i+1).replace(", ", sep).postln;
+				str = str.drop(i+1);
+			} {
+				str.keep(w).replace(", ", sep).postln;
+				str = str.drop(w);
+			}
+		};
+		str.replace(", ", sep).postln;
+		this.postline;
+	}
+
+	*load { |folder|
+		Routine({
+			var s = Server.default;
+			samples = samples ?? Dictionary.new;
+			folder = folder.standardizePath;
+			(folder +/+ "*").pathMatch.do({ |map|
+				var list = List.new;
+				(map +/+ "*.wav").pathMatch.do({ |file|
+					list.add(Buffer.read(s, file));
+				});
+				s.sync;
+				samples.put(
+					map.basename.withoutTrailingSlash.asSymbol,
+					list
+				);
+			});
+			s.sync;
+			"Loaded %".format(folder.quote).postln;
+			this.sample;
+		}).play;
+	}
+
+	*sample { |map, index|
+		case
+		{ samples.isNil } { ^"** no samples **" }
+		{ map.isNil } { this.postlist(
+			samples.keys.asArray.sort.collect({ |key|
+				var val = samples.at(key.asSymbol);
+				"% %".format(key, val.size);
+			});
+		)}
+		{ samples.at(map.asSymbol).isNil } {
+			^"** unknown map : % **".format(map.asString)
 		}
+		{ index.isNil } {
+			this.postline;
+			"map % samples:".format(map.asString.quote).postln;
+			samples.at(map.asSymbol).do({ |buf, i|
+				"% (% sec) % % %".format(
+					(i+1).asString.padLeft(3),
+					buf.duration.round(0.01).asString.padLeft(5),
+					buf.numChannels,
+					buf.bufnum,
+					PathName(buf.path).fileName
+				).postln;
+			});
+			this.postline;
+		} {
+			^samples.at(map.asSymbol).wrapAt(index - 1)
+		};
+		^"";
+	}
+
+	*audit { |map|
+		Routine({
+			samples.at(map.asSymbol).do({ |buf, i|
+				var filename = PathName(buf.path).fileName;
+				"% %".format(i.asString.padLeft(3), filename).postln;
+				case
+				{ buf.numChannels == 2 } {
+					{
+						PlayBuf.ar(2, buf, doneAction:2);
+					} .play
+				} {
+					{
+						Pan2.ar(PlayBuf.ar(1, buf, doneAction:2), 0)
+					} .play
+				};
+				(max(2, buf.duration) * TempoClock.tempo).wait;
+			});
+		}).play;
+	}
+
+	*unload { |folder| // TODO
+		var s = Server.default;
+		Routine({
+			(5 * TempoClock.tempo).wait;
+			samples.keys.do { |map|
+				samples.at(map).do { |buf| buf.free }
+			};
+			s.sync;
+			samples = nil;
+			"..samples unloaded".postln;
+		}).play;
+	}
+
+	*def { |name, func, variants|
+		^SynthDef(name, {
+			var sig, env, vel, freq, glide, sus, pf, gate, lpf;
+
+			freq = \freq.kr(60.midicps);
+			vel = \vel.kr(0.5); // timbre
+			gate = \gate.kr(1);
+			sus = \sustain.kr(0); // in seconds
+
+			// glide functionality
+			pf = \prevfreq.kr(60.midicps);
+			glide = \glide.kr(0);
+			freq = Env([pf, freq], glide * sus, \exp).kr(0, gate);
+
+			sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]);
+
+			// gain and mute use kr buses so that you can mute / fade
+			// long running synths while they are still playing
+			sig = sig * \amp.kr(1); // accents in patterns or modulation
+			sig = sig * \gain.kr(1); // fade in/out ("gain 0.3:7")
+			sig = sig * \cvgain.kr(1); // for (midi) controller
+			sig = sig * \cvenable.kr(1); // for (midi) controller
+			sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) - 1);
+
+			//sig = NumChannels.ar(sig, 2); // make sig always stereo! why?
+
+			// key tracking (using velocity too)
+			lpf = \lpf.kr(20000);
+			lpf = \kt.kr(0).linlin(0, 1, lpf, max(freq * (0.5+vel), lpf));
+			sig = RLPF.ar(sig, lpf, \rq.kr(1).linlin(0, 1, 0.05, 1));
+
+			// sends
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
+		}, variants: variants).add;
+	}
+
+	*bpm { |bpm|
+		bpm !? {
+			bpm = bpm.asInteger;
+			Routine({
+				JSQuant.quantize;
+				TempoClock.tempo_(bpm / 60 / 4);
+			}).play;
+		} ?? { bpm = TempoClock.tempo * 60 * 4 };
+		"bpm: % (% cps)".format(bpm, (bpm / 60 / 4).round(0.01)).postln;
+	}
+	
+	*cps { |cps|
+		cps !? {
+			cps = cps.asFloat;
+			Routine({
+				JSQuant.quantize;
+				TempoClock.tempo_(cps);
+			}).play;
+		} ?? { cps = TempoClock.tempo };
+		"cps: % (% bpm)".format(cps, (cps * 60 * 4).round(0.01)).postln;
+	}
+
+	*quant { |quant|
+		quant !? {
+			quant = quant.asInteger;
+			Routine({
+				JSQuant.quantize;
+				JSQuant.quant = quant;
+			}).play;
+		} ?? { quant = JSQuant.quant };
+		"quant: %".format(quant.round(0.01)).postln;
+	}
+
+	*buffer { |cycles|
+		buffers = buffers ? List.new;
+		case
+		{ cycles.notNil } {
+			cycles = cycles.asFloat;
+			Routine({
+				var s = Server.default;
+				var b = Buffer.alloc(
+					s,
+					cycles * s.sampleRate / TempoClock.tempo
+				);
+				(0.5 * TempoClock.tempo).wait;
+				b.clear;
+				buffers.add(b);
+				buffers.join("\n").postln;
+			}).play;
+			"audio buffer % cycles".format(cycles);
+		} { "audio buffers:\n" ++ buffers.join("\n") }
+	}
+		
+	*mic { |name, cycles=1, nudge=0|
+		this.rec(name, cycles, 2, nudge);
+	}
+	
+	*rec { |name, cycles, bus, nudge=0|
+		recordings = recordings ? Dictionary.new;
+		Routine({
+			var seconds, buf, old, now, def, s = Server.default;
+
+			case { bus == 2 } { def = \mic } { def = \rec };
+			
+			cycles = cycles.asInteger;
+			seconds = cycles / TempoClock.tempo; // 1 cycle = 1 beat
+			"% % cycles (% seconds)".format(def, cycles, seconds).postln;
+			buf = Buffer.alloc(s, seconds * s.sampleRate, 1);
+			s.sync;
+			"% bufnum %".format(def, buf.bufnum).postln;
+
+			JSQuant.quantize;
+			
+			// start synth 1 cycle from now + start countdown now
+			// start synth a little later, as input signal will take some
+			// time to enter supercollider.
+			s.makeBundle(1 / TempoClock.tempo + nudge, {
+				Synth(def, [buf: buf, in: bus], nil, \addToTail);
+			});
+
+			4.do { |i| "..%".format(4 - i).postln; (1/4).wait };
+			"..go!".postln;
+			
+			// countup in post window during \rec synth lifetime
+			(cycles * 4).do { |i| "--%".format(i+1).postln; (1/4).wait; };
+
+			// store the new recording; free old one if any
+			old = recordings.at(name.asSymbol);
+			recordings.put(name.asSymbol, buf);
+			old !? { |b| b.free };
+			
+			"record finished".postln;
+		}).play;
+	}
+
+	*save { |name, saveasname|
+		recordings.at(name.asSymbol) !? { |buffer|
+			var path;
+			saveasname = saveasname ? name;
+			saveasname = saveasname.asString;
+			
+			if(saveasname.endsWith(".wav").not) {
+				saveasname = saveasname ++ ".wav";
+			};
+			
+			path = ("~/" ++ saveasname).standardizePath;
+			
+			"Writing %% to %".format("\\", name, path.quote).postln;
+			buffer.write(path, "wav");
+		};
+	}
+
+	*end { |seconds=0.02|
+		Routine({
+			"Tidy stopping..".postln;
+			JSTrack.do { |track| track.hush(seconds) };
+			(seconds * TempoClock.tempo).wait; // audio fades out
+			JSMainloop.stop;
+		}).play;
 	}
 }
 
 JSTidy {
-	classvar <>quant=1;
-	classvar <>scale;
-	classvar <>root;
-	classvar <>log=0;
-	classvar mainloop;
-	classvar <>buffers; // allocated buffer objects
-	
-	/*
-		when parsing the function/pattern list, a tree is built in memory.
-		the nodes are JSTidyNode (or derivatives) objects, which all
-		have method "get(cycle, name)" which takes the current cycle,
-		and the name of the track we are in. The method returns a new
-		cycle (usually the original one with some added numbers for each
-		step of the cycle).
+	var <tree; // the root of the tree that is grown
+	var cur;   // the current leaf in the tree ("where we are")
 
-		so, after the tree has been built, we start with an empty cycle
-		and call "get" on the root node of the tree. The result will be
-		the cycle that we have to play next. you can see this in action
-		in method "add_to_queue" somewhere down below.
-    */
-	var <tree, cur;
-
-	*begin_mainloop {
-		mainloop ?? {
-			mainloop = Routine({
-				var cycle_number = 0;
-				JSTidy.quantize;
-				loop {
-					// control cycles set values on control buses.
-					JSTidyControls.play_next_cycle(cycle_number);
-					
-					// audio cycles use these values to generate audio.
-					JSTidyTracks.play_next_cycle(cycle_number);
-					
-					cycle_number = cycle_number + 1;
-
-					// 1 beat = 1 cycle
-					1.wait;
-				}
-			}).play;
-			"..mainloop begun".postln;
-		};
-	}
-	
-	*end_mainloop { |seconds=0.02|
-		mainloop !? { mainloop.stop };
-		mainloop = nil;
-		"..mainloop ended".postln;
-	}
-
-	*quantize {
-		var now = thisThread.beats;
-		((now + quant).div(quant) * quant - now).wait;
-	}
-	
 	// if you make a mistake, you might get here.
 	// printOn will do nothing if tree is nil: current sound keeps playing
 	doesNotUnderstand { |selector ... args|
@@ -173,6 +617,7 @@ JSTidy {
 	}
 
 	// return JSTidyXX function object. str = "<function name> <pattern>"
+	// future: str = "<function name> <pattern1> -- <pattern2>"
 	func { |str|
 		var func, pat, class;
 
@@ -180,10 +625,14 @@ JSTidy {
 		func = str.removeAt(0);
 		pat = str.join($ ).stripWhiteSpace;
 
-		class = "%%".format(func[0].toUpper, func.drop(1).toLower);
-		class = "JSTidyFP_%".format(class).asSymbol.asClass;
-		class !? { ^class.new(pat) };
-		^JSTidyFP(func, pat);
+		if(pat[0] == $#) {
+			^JSTidyFP_List(func, pat.drop(1).stripWhiteSpace);
+		} {
+			class = "%%".format(func[0].toUpper, func.drop(1).toLower);
+			class = "JSTidyFP_%".format(class).asSymbol.asClass;
+			class !? { ^class.new(pat) };
+			^JSTidyFP(func, pat);
+		}
 	}
 
 	add { |node|
@@ -238,6 +687,432 @@ JSTidy {
 	%| { |str| this.add(JSTidyCombRight("%").add(this.func(str))) }
 }
 
+JSQuant {
+	classvar <>quant=1;
+
+	*quantize {
+		var now = thisThread.beats;
+		((now + quant).div(quant) * quant - now).wait;
+	}
+}
+
+JSMainloop {
+	classvar <mainloop; // the Routine that plays all cycles
+	classvar <>shift=0; // wait extra beats once during mainloop
+	
+	*start {
+		mainloop ?? {
+			mainloop = Routine({
+				var cycle_number = 0;
+				JSControlBus.init(Server.default);
+				JSQuant.quantize;
+				loop {
+					JSTrack.do { |track|
+						case
+						{ track.hushed or: track.once } { }
+						{ track.play(cycle_number) }
+					};
+					cycle_number = cycle_number + 1;
+					1.wait;	// 1 beat = 1 cycle
+					if(shift > 0) {
+						"shifted %".format(shift).postln;
+						shift.wait;
+						shift=0;
+					};
+				}
+			}).play;
+			"..mainloop begun".postln;
+		};
+	}
+	
+	*stop { |seconds=0.02|
+		mainloop !? { mainloop.stop };
+		mainloop = nil;
+		"..mainloop ended".postln;
+	}
+}
+
+JSControlBus {
+	var <>bus, node, lastval;
+	
+	*new { ^super.new.bus_(Bus.control(Server.default, 1)) }
+
+	reset { |seconds=0.02|
+		this.set(0, seconds);
+		lastval = nil;
+	}
+		
+	*init { |server|
+		SynthDef(\controlbus, {
+			var cur = In.kr(\out.kr(0));
+			var sig = Env([cur, cur, \val.kr(0)],[0, \sec.kr(0)]).kr;
+			ReplaceOut.kr(\out.kr(0), sig);
+		}).add;
+		server.sync;
+	}
+	
+	// launch a synth that changes the value on the
+	// control bus over an amount of time in seconds.
+	set { |val, sec=0.02|
+		lastval ?? { sec = 0 };
+		if(val != lastval) {
+			"controlbus set % % (%)".format(val, lastval, sec).postln;
+			Server.default.bind {
+				node = Synth(
+					\controlbus,
+					[out: bus, val: val, sec: sec],
+					node,
+				    if(node.isNil, \addToTail, \addReplace)
+				);
+			};
+			lastval = val;
+		}
+	}
+}
+
+JSMute {
+	classvar muted;
+	classvar soloed;
+
+	*symbols { |str_or_symbol|
+		var result = List.new;
+		case
+		{ str_or_symbol.class == String } {
+			str_or_symbol.split($ ).do { |key|
+				case
+				{ key.isNil } { }
+				{ key.asString.size <= 0 } { }
+				{ result.add(key.asSymbol) }
+			}
+		}
+		{ str_or_symbol.class == Symbol }
+		{ result.add(str_or_symbol) }
+		{ };
+		^result;
+	}
+	
+	*add_to_set { |in, set|
+		this.symbols(in).do { |sym| set.add(sym) }
+	}
+
+	*remove_from_set { |in, set|
+		this.symbols(in).do { |sym| set.remove(sym) }
+	}
+
+	// \tidy mute: "a b c" or \tidy mute: \a
+	*mute { |str_or_symbol|
+		muted ?? { muted = Set.new };
+		if(str_or_symbol.isString) { muted = Set.new };
+		this.add_to_set(str_or_symbol, muted);
+		^this.pr_set_mute_buses;
+	}
+
+	*solo { |str_or_symbol|
+		soloed = Set.new;
+		this.add_to_set(str_or_symbol, soloed);
+		^this.pr_set_mute_buses;
+	}
+
+	*unmute { |str_or_symbol|
+		muted ?? { muted = Set.new };
+		this.remove_from_set(str_or_symbol, muted);
+		^this.pr_set_mute_buses;
+	}
+
+	*unsolo { |str_or_symbol|
+		soloed ?? { soloed = Set.new };
+		this.remove_from_set(str_or_symbol, soloed);
+		^this.pr_set_mute_buses;
+	}
+
+	// something has changed in the soloed or muted list.
+	// this might affect one or more tracks.
+	// let all tracks re-think the value for their mute_bus
+	//
+	// why is there a mute_bus for each track?
+	// if track \a starts playing a loooong note
+	// and track \b is put in solo
+	// then the loooong note on \a should be muted while still playing
+	// this is done by using the value of the mute_bus in all synthdefs
+	// as an inverted multiplier for the generated sound
+	//
+	// if \b is un-soloed, you could hear \a 's loooong note if it
+	// did not finish yet.
+	//
+	*pr_set_mute_buses {
+		muted ?? { muted = Set.new };
+		soloed ?? { soloed = Set.new };
+
+		JSTrack.do { |track| track.set_mute_bus };
+		
+		^"soloed %, muted %".format(soloed.as(Array), muted.as(Array));
+	}
+
+	*soloed_includes { |asymbol|
+		soloed ?? { soloed = Set.new };
+		^soloed.includes(asymbol);
+	}
+
+	*soloed_size {
+		soloed ?? { soloed = Set.new };
+		^soloed.size;
+	}
+	
+	*muted_includes { |asymbol|
+		muted ?? { muted = Set.new };
+		^muted.includes(asymbol);
+	}
+}
+
+JSTrack : JSTidy {
+	classvar tracks;
+
+	var <>gain_bus;
+	//var <>mute_bus, last_mute;
+	var queue, curtree, newtree;
+	var <hushed=false, hushing=false, <once=false;
+	var <>node, <>type, <>bus;
+	
+	*do { |func| tracks.do { |track| func.(track) } }
+	
+	*at { |name|
+		tracks ?? { tracks = Dictionary.new };
+		^tracks.at(name.asSymbol);
+	}
+
+	*atFail { |name|
+		var track, server = Server.default;
+		name = name.asSymbol;
+		tracks ?? { tracks = Dictionary.new };
+		tracks.at(name) !? { |track| ^track };
+		tracks.put(name, track = JSTrack.new);
+		
+		case
+		{ ((0..9).collect(_.asSymbol).includes(name)) }
+		{ track.type_(\fx).bus_(Bus.audio(server, 2)) }
+		{ (97..122).collect(_.asAscii).collect(_.asSymbol).includes(name) }
+		{
+			track.type_(\audio)
+			.gain_bus_(JSControlBus.new)
+			.bus_(Bus.audio(server, 2))
+		}
+		{ track.type_(\control).bus_(Bus.control(server, 1)) };
+		^track;
+	}
+	
+	// \a -- "n 0 2 3" - etc has been evaluated in the Interpreter
+	printOn { |stream|
+		// if tree is nil then something has gone wrong while creating it.
+		// in that case: stop here, so that curtree will keep going.
+		tree ?? { "%: tree nil".format("name").postln; ^this };
+		if(Tidy.log == \tree) { tree.log };
+		"%% pattern".format("\\", "name").printOn(stream);
+
+		once = false;
+		newtree = tree;
+		tree = nil; // get ready for next evaluation
+		hushed = false;
+		hushing = false;
+		node !? { Server.default.bind { node.release }; node = nil };
+
+		JSMainloop.start;
+	}
+
+	play { |cycle_number|
+		var steps = [], delta = 1;
+
+		Routine({
+			if((cycle_number % JSQuant.quant) == 0) {
+				if(curtree != newtree) { queue = nil };
+				curtree = newtree; // switch trees in quantized manner
+			};
+            curtree !? {
+				queue = queue ? List.new;
+
+				while { delta > 0.0001 } {
+					var step, clone, slow, fast;
+
+					if(queue.size <= 0) {
+						var rot, cycle;
+						cycle = curtree.get(JSTidyCycle.new, "name");
+						cycle.steps.do({ |x| rot ?? rot = x.at(\rot) });
+						cycle.rotate(rot ? 0);
+						if(Tidy.log == \cycle) { cycle.postln };
+						queue.addAll(cycle.steps);
+					};
+
+					step = queue.removeAt(0);
+
+					slow = step.dict.removeAt(\slow) ? 1;
+					if(slow.class == Bus) { slow = slow.getSynchronous };
+					fast = step.dict.removeAt(\fast) ? 1;
+					if(fast.class == Bus) { fast = fast.getSynchronous };
+					slow = slow / fast;
+					
+					step.delta = step.delta * slow;
+					step.dur = step.dur * slow;
+					
+					if(delta >= step.delta) {
+						delta = delta - step.delta;
+					} {
+						// insert a rest step at head of the queue
+						queue.insert(0,	JSTidyStep.rest(step.delta-delta));
+						step.delta = delta;
+						delta = 0;
+					};
+
+					steps = steps.add(step);
+				};
+
+				steps.do({ |step|
+					step.play(this);
+					step.log;
+					step.at(\once) !? { once = true; "once".postln };
+					step.delta.wait;
+				});
+			};
+		}).play;
+	}
+
+	hush { |seconds=0.02|
+		Routine({
+			if(hushing.not) {
+				gain_bus !? { gain_bus.reset(seconds) };
+				hushing = true;
+			};
+			(seconds * TempoClock.tempo).wait;
+			node !? {
+				Server.default.bind { node.release };
+				node = nil;
+			};
+			hushed = true;
+			queue = List.new;
+		}).play;
+	}
+
+	// \a -- [out, func_or_symbol, args, gain, target]
+	// target should be the out if that is a symbol
+	array { |input|
+		var server = Server.default;
+		var out, what, gain, args, target, old, addAction;
+
+		if(((input.class == Array) and: (input.size >= 2)).not) {
+			^"%% -- [out, func/def, [], gain, target]".format("\\", "0");
+		};
+
+		out = input[0];
+		args = input[2] ? [];
+		target = input[4];
+		args = args ++ [\gain, input[3] ? 1];
+		args = args ++ [\in, bus.index];
+		
+		Routine({
+			case
+			{ out.isInteger } { }
+			{ (out = JSTrack.at(out.asSymbol)).notNil }
+			{ out = out.bus.index }
+			{ out = 0 };
+			
+			// make bus mapping possible
+			args = args.collect({ |el, i|
+				var result = el;
+
+				if(((i % 2) == 1) and: (el.class == Symbol)) {
+					JSTrack.at(el) !? { |t|	result = t.bus.asMap }
+				};
+
+				result;
+			});
+
+			old = node;
+			target !? { target = JSTrack.at(target).node };
+			target ?? { target = old };
+			addAction = \addToHead;
+			target !? { addAction = \addBefore };
+
+			Server.default.bind {
+				case
+				{ input[1].isFunction }
+				{
+					// the function must expect an \in argument
+					// the function may use the \gain argument
+					node = input[1].play(
+						target: target,
+						addAction: addAction,
+						outbus: out,
+						fadeTime: 0.5,
+						args: args
+					);
+				}
+				{
+					// the synthdef should have a sustaining envelope
+					// with \gate arg (and fade in/fade out somewhat)
+					// the synthdef must use an \in and \outx bus argument
+					// the synthdef may use the \gain argument
+					node = Synth(
+						defName: input[1].asSymbol,
+						args: args ++ [\out, out],
+						target: target,
+						addAction: addAction
+					);
+				};
+
+				old !? { old.release };
+			}
+		}).play;
+	}
+
+	function { |func|
+		JSMainloop.start;
+
+		Server.default.bind {
+			node !? { node.release };
+			if(bus.notNil) {
+				node = func.play(outbus: bus.index)
+			} {
+				node = func.play
+			}
+		}
+	}
+
+	// reason for mute buses: it mutes running synths.
+	// the last_mute variable is cheaper than mute_bus.getSynchronous.
+	/*
+	set_mute_bus {
+		var new_mute = this.should_mute.asInteger;
+		if(new_mute == last_mute) { ^this };
+		mute_bus.setSynchronous(new_mute); // 0 or 1
+		last_mute = new_mute;
+	}
+	
+	should_mute {
+		// solo wins from mute
+		if(JSMute.soloed_includes(name.asSymbol)) { ^false };
+		if(JSMute.muted_includes(name.asSymbol)) { ^true };
+		if(JSMute.soloed_size > 0) { ^true };
+		^false;
+	}
+	*/
+}
+
+JSPlugins {
+	classvar dict, list;
+
+	*initClass { dict = Dictionary.new; list = List.new }
+
+	// the sequence in which plugins are added..
+	*add { |key, func|
+		if(list.includes(key).not) { list.add(key) };
+		dict.put(key, func);
+	}
+
+	// .. is the sequence with which they are called
+	*alter { |track, step|
+		list.do { |key|	dict.at(key.asSymbol).value(track, step) }
+	}
+}
+
+/*
 JSTidyAbstractIdentityDictionary {
 	*init { this.objects = IdentityDictionary.new }
 	*atFailPut { |key, func|
@@ -382,17 +1257,17 @@ JSTidyTracks : JSTidyAbstractIdentityDictionary {
 
 // one Track
 JSTidyTrack : JSTidy {
-	var <>name, <>prevfreq;
-	var <gain_bus, gain_routine, last_gain, gain_synth;
+	var <>name;
+	var last_gain, gain_bus;
 	var <mute_bus, last_mute, queue, curtree, newtree;
 	var <hushed=false, hushing=false, <once=false;
-	var node, randid;
+	var <>arfunc;
 	
 	*new { |name| ^super.new.init(name) }
 
 	init { |aname|
 		name = aname;
-		gain_bus = Bus.control(Server.default, 1);
+		gain_bus = JSControlBus.new;
 		mute_bus = Bus.control(Server.default, 1);
 	}
 
@@ -411,55 +1286,85 @@ JSTidyTrack : JSTidy {
 		tree = nil; // for next evaluation
 		hushed = false;
 		hushing = false;
-		
-		node !? {
-			// we are going to play a pattern, so kill playing ar function
-			server.bind { node.free };
-			node = nil
-		};
 
-		JSTidy.begin_mainloop;
+		this.free_arfunc;
+
+		JSMainloop.start;
 	}
 
-	// \a -- [\2, { function }]
+	free_arfunc {
+		arfunc !? {
+			// we are going to play a pattern, so kill playing ar function
+			Server.default.bind { arfunc.free };
+			arfunc = nil
+		}
+	}
+	
+	// \a -- [ \2, function / symbol, [ args ], gain ]
 	run { |arr|		
-		JSTidy.begin_mainloop;
+		var gain, args, server = Server.default;
+
+		JSMainloop.start;
 
 		// how about sync/quant?
 
-		node !? {
-			// we are playing an ar function, so kill any playing one first
-			Server.default.bind { node.free };
-			node = nil
+		this.free_arfunc;
+
+		args = arr[2] ? [];
+		gain = arr[3] ? 1;
+		
+		if(arr[1].isFunction) {
+			server.bind {
+				var index;
+				case
+				{ arr[0].class == Symbol }
+				{ index = arr[0].bus.index }
+				{ index = arr[0] };
+				arfunc = arr[1].play(nil, index, args: args)
+			};
+			
+			^"%% function".format("\\", name);
 		};
 
-		Server.default.bind { node = arr[1].play(nil, arr[0].bus.index) };
-
-		^"%% function".format("\\", name);
+		server.bind {
+			args = args.addAll([
+				\out1, arr[0].bus.index,
+				\gain1, gain,
+			]);
+			arfunc = Synth(arr[1].asSymbol, args);
+		};
+		
+		^"%% synthdef".format("\\", name);
 	}
-
+	
 	play_next_cycle { |cycle_number|
 		var steps = [], delta = 1;
 
 		if(hushed) { ^this };
 		if(once) { ^this };
-		node !? { ^this }; // an audio rate function is playing..
+		arfunc !? { ^this }; // an audio rate function is playing..
 
 		Routine({
 			if((cycle_number % JSTidy.quant) == 0) {
-				curtree = newtree;
+				if(curtree != newtree) { queue = nil };
+				curtree = newtree; // switch trees in quantized manner
 			};
             curtree !? {
 				queue = queue ? List.new;
 
 				while { delta > 0.0001 } {
-					var step, clone, slow;
+					var step, clone, slow, fast;
 
 					if(queue.size <= 0) { this.add_to_queue(curtree) };
 
 					step = queue.removeAt(0);
+
 					slow = step.dict.removeAt(\slow) ? 1;
-					slow = slow / (step.dict.removeAt(\fast) ? 1);
+					if(slow.class == Bus) { slow = slow.getSynchronous };
+					fast = step.dict.removeAt(\fast) ? 1;
+					if(fast.class == Bus) { fast = fast.getSynchronous };
+					slow = slow / fast;
+					
 					step.delta = step.delta * slow;
 					step.dur = step.dur * slow;
 					
@@ -480,11 +1385,9 @@ JSTidyTrack : JSTidy {
 
 				// play the steps
 				steps.do({ |step|
-					step.put(\prevfreq, prevfreq);
 					step.play_audio(name, this);
 					step.log;
 					step.at(\once) !? { once = true; "once".postln };
-					prevfreq = step.at(\freq) ? prevfreq;
 					step.delta.wait;
 				});
 			};
@@ -510,18 +1413,17 @@ JSTidyTrack : JSTidy {
 			hushing = true;
 			(seconds * TempoClock.tempo).wait;
 			hushed = true;
-			node !? {
-				server.bind { node.free };
-				node = nil
-			};
+			this.free_arfunc;
 			queue = List.new;
 			last_gain = nil;
 		}).play;
 	}
 
+	// reason for gain bus: gain automation over multiple synths
+	// being launched on a track
 	set_gain { |step|
 		var gain = (step.at(\gain) ? 0.5);
-		step.put(\gain, gain_bus.asMap);
+		step.put(\gain, gain_bus.bus);
 		step.put(\mute, mute_bus.asMap);
 		if(gain == last_gain) {	^this };
 		this.pr_set_gain(gain, max(0.02, step.at(\gainsec) ? 0));
@@ -543,27 +1445,13 @@ JSTidyTrack : JSTidy {
 		if(JSTidyTracks.soloed_size > 0) { ^true };
 		^false;
 	}
-	
+
 	pr_set_gain { |gain, sec=0|
 		if(hushing) { ^this };
-		gain_routine !? { gain_routine.stop; gain_routine=nil };
-
-		if(last_gain.isNil) { sec = 0 }; // do not miss 1st kickdrum..
+		if(last_gain.isNil) { sec = 0 }; // 1st kickdrum..
 		"% gain % -> % (%)".format(name, last_gain, gain, sec).postln;
 		last_gain = gain;
-		gain_routine = Routine({
-			gain_synth !? { gain_synth.free };
-			Server.default.bind {
-				gain_synth = Synth(\tidy_fader, [
-					\target, gain,
-					\bus, gain_bus,
-					\fadetime, sec
-				]);
-			};
-			(sec * TempoClock.tempo).wait; // wait for synth
-			gain_routine = nil;
-			gain_synth = nil;
-		}).play;
+		gain_bus.set(gain, sec);
 	}
 }
 
@@ -596,7 +1484,7 @@ JSTidyControls : JSTidyAbstractIdentityDictionary {
 
 // one controlrate track (a Control)
 JSTidyControl : JSTidy {
-	var <>name, queue, curtree, newtree, <bus, node;
+	var <>name, queue, curtree, newtree, <bus, krfunc;
 	var <hushed=false, hushing=false, <once=false;
 
 	*new { |name| ^super.new.init(name) }
@@ -619,21 +1507,23 @@ JSTidyControl : JSTidy {
 
 		newtree = tree;
 		tree = nil;
-		
-		node !? {
-			server.bind { node.free };
-			node = nil
-		};
-		
-		JSTidy.begin_mainloop;
+		this.free_krfunc;
+		JSMainloop.start;
 	}
 
+	free_krfunc {
+		krfunc !? {
+			Server.default.bind { krfunc.free };
+			krfunc = nil
+		};
+	}
+	
 	run { |func|
-		JSTidy.begin_mainloop;
+		JSMainloop.start;
 		Routine({
 			Server.default.bind {
-				node !? { node.free };
-				node = func.play(nil, bus.index);
+				krfunc !? { krfunc.free };
+				krfunc = func.play(nil, bus.index);
 			};
 		}).play;
 		^"%% kr function".format("\\", name);
@@ -641,7 +1531,7 @@ JSTidyControl : JSTidy {
 	
 	setSynchronous { |value|
 		Routine({
-			node !? { node.free; node = nil };
+			this.free_krfunc;
 			bus.setSynchronous(value.asFloat);
 		}).play;
 	}
@@ -659,10 +1549,7 @@ JSTidyControl : JSTidy {
 	hush { |seconds=0.02|
 		var server = Server.default;
 		hushing = true;
-		node !? {
-			server.bind { node.free };
-			node = nil
-		};
+		this.free_krfunc;
 		hushed = true;
 		queue = List.new;
 	}
@@ -672,23 +1559,29 @@ JSTidyControl : JSTidy {
 
 		if(hushed) { ^this };
 		if(once) { ^this };
-		node !? { ^this }; // a control rate function is playing..
+		krfunc !? { ^this }; // a control rate function is playing..
 		
 		Routine({
 			if((cycle_number % JSTidy.quant) == 0) {
+				if(curtree != newtree) { queue = nil };
 				curtree = newtree;
 			};
 			curtree !? { 
 				queue = queue ? List.new;
 
 				while { delta > 0.0001 } {
-					var step, clone, slow;
+					var step, clone, slow, fast;
 
 					if(queue.size <= 0) { this.add_to_queue(curtree) };
 
 					step = queue.removeAt(0);
+
 					slow = step.dict.removeAt(\slow) ? 1;
-					slow = slow / (step.dict.removeAt(\fast) ? 1);
+					if(slow.class == Bus) { slow = slow.getSynchronous };
+					fast = step.dict.removeAt(\fast) ? 1;
+					if(fast.class == Bus) { fast = fast.getSynchronous };
+					slow = slow / fast;
+					
 					step.delta = step.delta * slow;
 					step.dur = step.dur * slow;
 					
@@ -708,8 +1601,11 @@ JSTidyControl : JSTidy {
 				};
 
 				steps.do({ |step|
-					// play the step
-					step.play_control(name, this);
+					if(step.at(\set).notNil) {
+						step.play_set(name, this);
+					} {
+						step.play_control(name, this);
+					};
 					step.log;
 					step.at(\once) !? { once = true; "once".postln };
 					step.delta.wait;
@@ -756,6 +1652,7 @@ JSTidyEffect {
 	asMap { ^bus.asMap }
 	
 	// [out, func_or_symbol, args, gain, target]
+	// target should be the out if that is a symbol
 	run { |input|
 		var server, out, what, gain, args, target, old, addAction;
 
@@ -857,6 +1754,7 @@ JSTidyEffect {
 		}).play;
 	}
 }
+*/
 
 // a cycle, containing steps.
 JSTidyCycle {
@@ -930,21 +1828,16 @@ JSTidyStep {
 	putAll { |argdict| dict.putAll(argdict) }
 	put { |key, value| dict.put(key.asSymbol, value) }
 
-	at { |key|
-		var val = dict.at(key.asSymbol);
-
-		// check if we have a bus, and if so, read value from it
-		// if you need to have the Bus yourself, then use dict.at()
-		if(val.class == Bus) { ^val.getSynchronous };
-		^val;
-	}
-
+	at { |key| ^dict.at(key) }
+	has { |key| ^dict.includesKey(key) }
+	
 	removeAt { |key|
 		var val = this.at(key.asSymbol);
 		dict.removeAt(key.asSymbol);
 		^val;
 	}
 
+	/*
 	play_control { |name, track|
 		var degrade, tempo;
 
@@ -974,242 +1867,58 @@ JSTidyStep {
 	}
 
 	play_audio { |name, track|
-		var buf, sustain, degrade, rate=1, tempo;
-		var bufbeats, bufseconds, do_not_play=false;
-
-		// we should do: 1 cycle = 1 bar = 4 beats (usually)
+		var tempo = TempoClock.tempo;
 		
-		// at the moment we do: 1 cycle == 1 TempoClock beat == 1 bar
-		// all synths will have their gate shut after sustain beats
-		// all synths will receive sustain arg in seconds
-		tempo = TempoClock.tempo;
-
-		// the RandID determines which random number generator is used.
-		// random number generators are shared between synths. so, if
-		// many synths share the same generator, and you change the order
-		// in which you give synths a new seed, then you will not get the
-		// exact same sequences or sounds. if you want recurring sounds,
-		// then use a randid per track. Object ID of the JSTidyTrack
-		// object. Should be overrideable though step->randid.
-		// A routine inherits randomgenerator, unless you set a seed.
-		degrade = (this.at(\degrade) ? 1).coin.asInteger;
-		if(degrade <= 0) { do_not_play = true };
-		if(trig <= 0) { do_not_play = true };
-		if(track.should_mute) { do_not_play = true };
-
-		if(do_not_play == false) {
-
-			track.set_gain(this);
-
-			// buffer indexes are 1-based, but the library is 0-based!
-			dict.at(\snd) !? { |bank|
-				var index = (this.at(\buf) ? 1).asInteger;
-				if(index <= -1) {
-					rate = rate * -1;
-					index = index * -1;
-				};
-				buf = JSTidySamples.buf(bank, index);
-				buf ?? {
-					"buf % % unknown".format(bank, index).postln;
-					do_not_play = true;
-				};
-			};
-			
-			dict.at(\play) !? { |rec|
-				buf = Library.at(\tidyrec, rec.asSymbol);
-				buf ?? {
-					"rec buf % unknown".format(rec).postln;
-					do_not_play = true;
-				};
-			};
-		};
-		
-		if(do_not_play) {
-			dict.keysValuesDo({ |k,v|
-				if(v.class == Bus) { dict.put(k, v.asMap) }
-			});
-			//"step % does not play".format(name).postln;
-			^this;
-		};
-		
-		//this.set_freq;
-		//dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq));
-
-		sustain = dur * (this.at(\legato) ? 0.8); // default sustain rule
-		
-		buf !? {
-			var fit, stretch, begin, end, legato;
-			
-			//def = "playbuf%".format(buf.numChannels).asSymbol;
-            //if((this.at(\rumble) ? 0) > 0) {
-			//	def = "rumble%".format(buf.numChannels).asSymbol;
-			//};
-			
-			this.at(\speed) !? { |speed| rate = rate * speed };
-			this.at(\reversed) !? { |reversed|
-				if(reversed) { rate = rate * -1 }
-			};
-			rate = rate * buf.sampleRate / Server.default.sampleRate;
-			
-			begin = this.at(\begin) ? 0;
-			end = this.at(\end) ? 1;
-
-			bufseconds = buf.numFrames / Server.default.sampleRate;
-			bufseconds = bufseconds * abs(end - begin);
-			bufseconds = bufseconds / abs(rate);
-			
-			bufbeats = bufseconds * tempo;
-
-			this.put(\begin, begin);
-			if(rate < 0) { this.put(\begin, end) }; // for PlayBuf
-
-			// create mirror option: - "~ 1 ~ <1 1^>" -
-			// rate < 0 is not the same as mirroring to the beat
-			// if bufbeats > delta, do begin = delta / bufbeats * end
-			// if delta > bufbeats, use latebeats = delta - bufbeats
-
-			this.put(\bufchannels, buf.numChannels);
-			this.put(\bufnum, buf.bufnum);
-
-			// the default is: play whole sample
-			legato = this.at(\legato) ? max(1, bufbeats / dur);
-			this.put(\legato, legato);
-			sustain = dur * legato;
-
-			this.at(\fit) !? { |fit|
-				// play sample during <fit> step durations
-				if(delta > 0) { delta = delta * fit }; // "n [0,2,4]"
-				sustain = dur * fit;
-			};
-			this.at(\stretch) !? { |stretch|
-				// fit step around <stretch> samples
-				if(delta > 0) { delta = bufbeats * stretch }; //"n [0,2,4]"
-				sustain = bufbeats * stretch;
-			};
-			
-			dict.put(\sustainbeats, sustain);
-
-			// flip: align a reversed sample perfectly to the right
-			if((this.at(\flip) ? 0) > 0) {
-				if(rate > 0) { rate = rate * -1 };
-				if(bufbeats >= sustain) {
-					this.put(\begin, sustain / bufbeats);
-				} {
-					this.put(\begin, 1);
-					this.put(\latebeats, sustain - bufbeats);
-				};
-			};
-		};
-
-		if(this.play_midinote) { ^this };
-
-		JSPlugins.alter(name, dict);
-
-		dict.put(\prevfreq, dict.at(\prevfreq) ? dict.at(\freq)); // glide
-		dict.at(\def) ?? { "no def".postln; ^this };
-
-		/*
-		dict.at(\def) !? { def = dict.at(\def) };
-		def ?? { "no def".postln; ^this };
-		def = def.asSymbol;
-		dict.put(\def, def); // also for logging
-		*/
-		
-		dict.put(\rate, rate);
-
+		if((dict.at(\degrade) ? 1).coin.not) { ^this };
+		if(trig <= 0) { ^this };
+		if(track.should_mute) { ^this };
 		// sustain is overrideable in seconds (for percussive synths)
-		this.at(\sustain) ?? { dict.put(\sustain, sustain / tempo) }; // s
-		sustain = dict.at(\sustain) * tempo; // beats
-		
+		this.at(\sustain) ?? {
+			var sustainBeats = dur * (dict.at(\legato) ? 0.8);
+			dict.put(\sustain, sustainBeats / tempo)
+		};
+		track.set_gain(this);
+		if(this.play_midiout) { ^this };
+		JSPlugins.alter(name, this); // all plugins do their thing
+
+		dict.at(\def) ?? { "no def".postln; ^this };
 		this.put_sends;
 
-		dict.keysValuesDo({ |k, v|
-			if(v.class == Bus) { dict.put(k, v.asMap) }
-		});
+		dict = dict.collect { |v| case {v.class == Bus} {v.asMap} {v} };
 
-		// vowel support: move to plugin!
-		dict.at(\vowel) !? { |vowel|
-			vowel = vowel.asSymbol; // \a \o \e \i \u
-			Vowel.formLib.at(vowel) !? {
-				var reg = (dict.at(\register) ? 0); // 0,1,2 etc
-				var regs = [\bass, \tenor, \counterTenor, \alto, \soprano];
-				reg = regs.at(reg.clip(0, regs.size));
-				vowel = Vowel(vowel, reg).brightenExp(3);
-				dict.put(\vowel_freqs, vowel.freqs);
-				//dict.put(\vowel_rqs, vowel.widths / vowel.freqs);
-				dict.put(\vowel_rqs, vowel.amps); // seen in SuperDirt..
-				dict.put(\vowel_amps, vowel.amps);
-			}
-		};
-
-		// play the note on a separate thread (sustain.wait)
+		// play note on a separate thread (because of sustain.wait)
 		Routine({
-			var synthDesc, synth, latebeats=0, def;
+			var synthDesc, node, latebeats=0;
 
-			def = dict.at(\def);
-			
-			synthDesc = SynthDescLib.at(def);
-			
 			dict.at(\latemsecs) !? { |msecs|
 				latebeats = (msecs.clip(0, 40) / 1000 * tempo);
 			};
-			
 			dict.at(\latebeats) !? { |beats|
 				latebeats = latebeats + (beats.clip(0, 1));
 			};
-			
-			// needed for dilla-type beats
 			// https://www.youtube.com/watch?v=0dsjuPZsNwQ
 			if(latebeats > 0) { latebeats.wait };
-			
-			Server.default.bind { synth = Synth(def, dict.asPairs) };
-			sustain.wait;
-			if(synthDesc.hasGate and: synthDesc.canFreeSynth) {
-				Server.default.bind { synth.set(\gate, 0) };
-			}
+
+			Server.default.bind {
+				node = Synth(dict[\def], dict.asPairs)
+			};
+			(dict.at(\sustain) * tempo).wait; // in beats
+			Server.default.bind { node.release };
 		}).play;
 	}
 
-	set_freq {
-		this.at(\freq) ?? {
-			var e = Event.default;
-			e.putAll(dict);
-			e.use { ~f = ~freq.value };
-			dict.put(\freq, e.at(\f));
-		}
+	// send your dict as parameters to a node (fx or track)
+	play_set { |name, track|
+		if((dict.at(\degrade) ? 1).coin.not) { ^this };
+		if(trig <= 0) { ^this };
+
+		//JSPlugins.alter(name, this); // all plugins do their thing
+
+		dict.at(\set).asSymbol.setarr(dict.asPairs);
 	}
-	
-	// TODO: could use existing code in Event object here
-	set_freq_old {
-		var scale;
+	*/
 
-		scale = dict.at(\scale) ? JSTidy.scale ? \major;
-		scale = Scale.at(scale.asSymbol) ? Scale.major;
-
-		this.at(\freq) ?? {
-			var steps = 12;
-			var mtranspose = this.at(\mtranspose) ? 0;
-			var degree = (this.at(\note) ? 0).asFloat;
-			var gtranspose = 0;
-			var root = this.at(\root) ? 0;
-			var oct = this.at(\octave) ? 5;
-
-			var note = (degree + mtranspose).degreeToKey(scale, steps);
-			// midi is the midinote (continuous intermediate values)
-			var midi = ((note + gtranspose + root) / steps + oct) * 12.0;
-			var ctranspose = 0;
-			var harmonic = 1.0;
-			var detune = 0;
-
-			this.at(\midinote) !? { midi = this.at(\midinote) };
-			dict.put(
-				\freq,
-				(midi + ctranspose).midicps * harmonic + detune
-			);
-		};
-	}
-
-	play_midinote {
+	play_midiout {
 		dict.at(\midiout) !? { |chan|
 			Library.at(\tidy, \midiout).noteOn(
 				chan,
@@ -1226,7 +1935,7 @@ JSTidyStep {
 
 		^false;
 	}
-
+	
 	/*
 		all synthdefs define outx/gainx control pairs, so that some
 		of the audio can be sent to effect buses:
@@ -1263,7 +1972,7 @@ JSTidyStep {
 		// distribute the values over the available outputs of the synth
 		send = 1;
 		10.do { |i|
-			JSTidyEffects.at(i.asSymbol) !? { |effect|
+			JSTrack.at(i.asSymbol) !? { |effect|
 				case
 				{ fx[i].notNil } {
 					this.put(("out" ++ send).asSymbol, effect.bus.index);
@@ -1280,8 +1989,78 @@ JSTidyStep {
 		}
 	}
 
+	play { |track|
+		var tempo = TempoClock.tempo;
+		
+		if((dict.at(\degrade) ? 1).coin.not) { ^this };
+		if(trig <= 0) { ^this };
+
+		if(track.type == \control) {
+			dict.at(\cv) ? dict.at(\control) !? { |cv|
+				Routine({
+					var latebeats=0;
+
+					dict.at(\latemsecs) !? { |msecs|
+						latebeats = (msecs.clip(0, 40) / 1000 * tempo);
+					};
+					
+					dict.at(\latebeats) !? { |beats|
+						latebeats = latebeats + (beats.clip(0, 1));
+					};
+					
+					if(latebeats > 0) { latebeats.wait };
+					
+					track.bus.setSynchronous(cv.asFloat);
+				}).play;
+			}
+			^nil;
+		};
+
+		//if(track.should_mute) { ^this };
+		// sustain is overrideable in seconds (for percussive synths)
+		this.at(\sustain) ?? {
+			var sustainBeats = dur * (dict.at(\legato) ? 0.8);
+			dict.put(\sustain, sustainBeats / tempo)
+		};
+
+		//step.put(\mute, track.mute_bus.asMap);
+		track.gain_bus.set(
+			(this.at(\gain) ? 0.5).asFloat,
+			max(0.02, (this.at(\gainsec) ? 0).asFloat)
+		);
+		this.put(\gain, track.gain_bus.bus);
+
+		if(this.play_midiout) { ^this };
+		JSPlugins.alter(track, this); // all plugins do their thing
+
+		dict.at(\def) ?? { "no def".postln; ^this };
+		this.put_sends;
+
+		dict = dict.collect { |v| case {v.class == Bus} {v.asMap} {v} };
+
+		// play note on a separate thread (because of sustain.wait)
+		Routine({
+			var synthDesc, node, latebeats=0;
+
+			dict.at(\latemsecs) !? { |msecs|
+				latebeats = (msecs.clip(0, 40) / 1000 * tempo);
+			};
+			dict.at(\latebeats) !? { |beats|
+				latebeats = latebeats + (beats.clip(0, 1));
+			};
+			// https://www.youtube.com/watch?v=0dsjuPZsNwQ
+			if(latebeats > 0) { latebeats.wait };
+
+			Server.default.bind {
+				node = Synth(dict[\def], dict.asPairs)
+			};
+			(dict.at(\sustain) * tempo).wait; // in beats
+			Server.default.bind { node.release };
+		}).play;
+	}
+
 	log {
-		if((JSTidy.log == \step) or: ((dict.at(\log) ? 0) > 0)) {
+		if((Tidy.log == \step) or: ((dict.at(\log) ? 0) > 0)) {
 			this.postln;
 		}
 	}
@@ -1298,13 +2077,13 @@ JSTidyStep {
 
 		dict.keys.asArray.sort.do { |k|
 			var str, val = dict.at(k.asSymbol);
-			if(k != \log) {
+			//if(k != \log) {
 				if(val.isFloat) { val = val.round(0.01) };
 				str = "%:% ".format(k, val);
 				if((len - (str.size)) < 0) { stream << "\n"; len=width; };
 				stream << str;
 				len = len - str.size;
-			};
+			//};
 		};
 		
 		//dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
@@ -1327,353 +2106,6 @@ JSTidyStep {
 
 JSTidyException : Exception {
 	reportError { this.errorString.postln }
-}
-
-// helper class for defining synthdefs
-JSTidyDefs {
-	classvar defs_added = 0; // add internal synthdefs once
-	
-	*def { |name, func, variants|
-		SynthDef(name, {
-			var sig, env, vel, freq, glide, sus, pfreq, gate, lpf;
-
-			vel = \vel.kr(0.5); // timbre
-			gate = \gate.kr(1);
-			freq = \freq.kr(60.midicps);
-
-			// glide functionality
-			pfreq = \prevfreq.kr(60.midicps);
-			sus = \sustain.kr(0); // in seconds
-			glide = \glide.kr(0);
-			freq = Env([pfreq, freq], glide * sus, \exp).kr(0, gate);
-
-			sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]);
-
-			// gain / mute
-			sig = sig * \amp.kr(1); // accents in patterns or modulation
-			sig = sig * \gain.kr(1); // fade in/out ("gain 0.3:7")
-			sig = sig * \cv_gain.kr(1); // for (midi) controller
-			sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) - 1);
-
-			//sig = NumChannels.ar(sig, 2); // make sig always stereo! why?
-
-			// key tracking (using velocity too)
-			lpf = \lpf.kr(20000);
-			lpf = \kt.kr(0).linlin(0, 1, lpf, max(freq * (0.5+vel), lpf));
-			sig = RLPF.ar(sig, lpf, \rq.kr(1).linlin(0, 1, 0.05, 1));
-
-			// sends
-			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
-			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
-			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
-		}, variants: variants).add;
-	}
-
-	*add_internal_defs {
-		if(defs_added > 0) { ^this };
-
-		SynthDef(\tidy_fader, { |target=0, bus, fadetime=0, t_trig=1|
-			var val = In.kr(bus, 1);
-			val = Env([val, val, target], [0, fadetime]).kr(2, t_trig);
-			ReplaceOut.kr(bus, val);
-		}).add;
-
-		SynthDef(\mic, {
-			var bufnum = \buf.kr(0);
-			var in = In.ar(\in.kr(0), 2);
-
-			// make mono to use it with grainbuf / tgrains
-			in = [in.sum];
-			
-			// highpass to avoid mic rumble
-			in = HPF.ar(in, 200);
-			in = HPF.ar(in, 100);
-			in = LeakDC.ar(in);
-			
-			RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
-		}).add;
-
-		SynthDef(\rec, {
-			var bufnum = \buf.kr(0);
-			var in = In.ar(\in.kr(0), 2);
-			RecordBuf.ar([in.sum], bufnum, loop: 0, doneAction: 2);
-		}).add;
-
-		/*
-		// play stereo buffer
-		JSTidyDefs.def(\playbuf2, {
-			arg freq, vel, gate, sustain, att, rel, crv;
-			var sig, rate, bufnum, begin;
-
-			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
-			bufnum = \bufnum.kr(0);
-			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
-			sig = LeakDC.ar(sig);
-			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
-			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
-		});
-		
-		// play mono buffer
-		JSTidyDefs.def(\playbuf1, {
-			arg freq, vel, gate, sustain, att, rel, crv;
-			var sig, rate, bufnum, begin;
-			
-			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
-			bufnum = \bufnum.kr(0);
-			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
-			sig = LeakDC.ar(sig);
-			sig = Pan2.ar(sig, \pan.kr(0));
-			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
-		});
-
-		// play stereo buffer
-		JSTidyDefs.def(\rumble2, {
-			arg freq, vel, gate, sustain, att, rel, crv;
-			var sig, rate, bufnum, begin, rumble, env, delay, amount;
-			//
-			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
-			bufnum = \bufnum.kr(0);
-			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			sig = PlayBuf.ar(2, bufnum, rate, startPos: begin);
-			//
-			amount = \rumble.kr(0);
-			rumble = sig.sum;
-			delay = LFNoise2.kr(0.5).range(0.27, 0.51)!6 * sustain;
-			rumble = CombL.ar(rumble, 1, delay, sustain*(1+amount),amount);
-			rumble = LPF.ar(rumble.sum, 22);
-			sig = LeakDC.ar(sig + rumble!2);
-			//
-			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
-			env = Env([0, 1, 1, 0], [att, sustain, rel], crv).kr(2);
-			sig * env;
-		});
-
-		JSTidyDefs.def(\rumble1, {
-			arg freq, vel, gate, sustain, att, rel, crv;
-			var sig, rate, bufnum, begin, rumble, env, delay, amount;
-			//
-			rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
-			bufnum = \bufnum.kr(0);
-			begin = \begin.kr(0) * BufFrames.kr(bufnum);
-			sig = PlayBuf.ar(1, bufnum, rate, startPos: begin);
-			//
-			amount = \rumble.kr(0);
-			rumble = sig;
-			//
-			delay = LFNoise2.kr(0.5).range(0.27, 0.51)!6 * sustain;
-			rumble = CombL.ar(rumble, 1, delay, sustain*(1+amount),amount);
-			rumble = LPF.ar(rumble.sum, 22);
-			sig = LeakDC.ar(sig + rumble);
-			//
-			sig = Pan2.ar(sig);
-			env = Env([0, 1, 1, 0], [att, sustain, rel], crv).kr(2, gate);
-			sig * env;
-		});
-		*/
-		
-		defs_added = 1;
-	}
-
-	*defs {
-		var defs = Dictionary.newFrom([
-			\fx, SortedList.new, \src, SortedList.new
-		]);
-		SynthDescLib.global.synthDescs.keys.do { |k|
-			case
-			{ k.asString.keep(7) == "system_" } { }
-			{ k.asString.keep(4) == "old_" } { }
-			{ k.asString.keep(5) == "tidy_" } { }
-			{
-				var added = false;
-				SynthDescLib.at(k).inputs.do { |iodesc|
-					if(iodesc.asString == "audio In in 2") {
-						defs[\fx].add(k.asString);
-						added = true;
-					};
-				};
-				if(added.not) {
-					defs[\src].add(k.asString);
-					SynthDescLib.at(k).def.variants !? { |variants|
-						variants.keys.do { |v|
-							defs[\src].add((k ++ "." ++ v).asString);
-						}
-					}
-				};
-			}
-		};
-
-		defs.keysValuesDo({ |key, v|
-			key.asString.toUpper.postln;
-			JSTidyUtil.postlist(v);
-		});
-	}
-}
-
-JSTidySamples {
-	*load { |folder|
-		var func = {
-			var s = Server.default;
-			folder = folder.standardizePath;
-			(folder +/+ "*").pathMatch.do({ |bank|
-				var samples = List.new;
-				(bank +/+ "*.wav").pathMatch.do({ |file|
-					samples.add(Buffer.read(s, file));
-				});
-				
-				s.sync;
-
-				Library.put(
-					\samples,
-					bank.basename.withoutTrailingSlash.asSymbol,
-					samples
-				);
-			});
-			s.sync;
-			"Loaded %".format(folder.quote).postln;
-			JSTidySamples.samples;
-		};
-		
-		if(thisProcess.mainThread == thisThread)
-		{ Routine(func).play } { func.value };
-	}
-
-	*samples { |bank|
-		case
-		{ Library.at(\samples).isNil } {
-			JSTidyUtil.postlist(["** no banks / samples **"])
-		}
-		{ bank.isNil }
-		{
-			JSTidyUtil.postlist(
-				Library.at(\samples).keys.asArray.sort.collect({ |key|
-					var val = Library.at(\samples, key.asSymbol);
-					"% %".format(key, val.size);
-				})
-			)
-		}
-		{ Library.at(\samples, bank.asSymbol).isNil } {
-			JSTidyUtil.postlist([
-				"** unknown bank : % **".format(bank.asString)
-			])
-		}
-		{
-			JSTidyUtil.postline;
-			"bank % samples:".format(bank.asString.quote).postln;
-
-			Library.at(\samples, bank.asSymbol).do({ |buf, i|
-				var filename = PathName(buf.path).fileName;
-				var index = (i+1).asString.padLeft(3);
-				var sec = buf.duration.round(0.01).asString.padLeft(3);
-				var bufnum = buf.bufnum;
-				"% (% sec) % %".format(index, sec, bufnum,filename).postln;
-			});
-			JSTidyUtil.postline;
-		};
-	}
-
-	*sample { |bank, index|
-		^Library.at(\samples, bank.asSymbol, abs(index) - 1)
-	}
-
-	*audit { |bank|
-		Routine({
-			Library.at(\samples, bank.asSymbol).do({ |buf, i|
-				var filename = PathName(buf.path).fileName;
-				"% %".format(i.asString.padLeft(3), filename).postln;
-				case
-				{ buf.numChannels == 2 } {
-					{
-						PlayBuf.ar(2, buf, doneAction:2);
-					} .play
-				} {
-					{
-						Pan2.ar(PlayBuf.ar(1, buf, doneAction:2), 0)
-					} .play
-				};
-				(max(2, buf.duration) * TempoClock.tempo).wait;
-			});
-		}).play;
-	}
-
-	*end { |seconds=0.02|
-		Routine({
-			(5 * TempoClock.tempo).wait;
-			
-			Library.at(\samples).keys.do { |bank|
-				Library.at(\samples, bank).do { |buffer|
-					buffer.free;
-				}
-			};
-
-			Server.default.sync;
-			
-			Library.put(\samples, nil);
-			"..buffers ended".postln;
-		}).play;
-	}
-
-	*buf { |bank, index|
-		^Library.at(\samples, bank.asSymbol).wrapAt(index - 1);
-	}
-}
-
-JSTidyUtil {
-	*postline { |w=38| "".padLeft(w+6, "-").postln }
-	
-	*postlist { |list, sep|
-		var w = 38, str = ",".ccatList(list).replace(",, ", "");
-		sep = sep ? " - ";
-		
-		JSTidyUtil.postline;
-		while { str.size > w } {
-			var i = w;
-			while { str[i] != $  and: (i > 0) } { i = i - 1 };
-			if(i > 0) {
-				str.keep(i+1).replace(", ", sep).postln;
-				str = str.drop(i+1);
-			} {
-				str.keep(w).replace(", ", sep).postln;
-				str = str.drop(w);
-			}
-		};
-		str.replace(", ", sep).postln;
-		JSTidyUtil.postline;
-	}
-
-	// abcdefg a# ab a1 a7, c5 = 60
-	*notemidi { |str|
-		var octave = 5;
-		var sharp = 0;
-		var flat = 0;
-		var note = $c;
-		
-		if("abcdefg".contains(str[0])) { note = str[0] };
-		if(str.size == 2) {
-			if(str[1] == $#) { sharp = true };
-			if(str[1] == $b) { flat = true };
-			if("12345678".contains(str[1])) { octave = str[1].asInteger };
-		};
-		if(str.size == 3) {
-			if(str[1] == $#) { sharp = true };
-			if(str[1] == $b) { flat = true };
-			if("12345678".contains(str[2])) { octave = str[2].asInteger };
-		};
-
-		note = note.ascii - $a.ascii;
-		if(note >= 2) {
-			note = 12 * octave + note
-		} {
-			note = 12 * (octave - 1) + note
-		};
-
-		if(flat) { note = note - 1 };
-		if(sharp) { note = note + 1 };
-
-		^note;
-	}
 }
 
 /////////////////////////////////////////////////////
@@ -1759,8 +2191,8 @@ JSTidyCombLeft : JSTidyNode {
 			
 			// combine the values for the keys
 			keys.do { |key|
-				var stepval = step.dict.at(key);
-				var otherval = other.dict.at(key);
+				var stepval = step.at(key);
+				var otherval = other.at(key);
 				
 				case
 				{ stepval.isNil } { step.put(key, otherval) }
@@ -1768,25 +2200,27 @@ JSTidyCombLeft : JSTidyNode {
 				// now we know that both are not nil..
 				{ val == ">" } { step.put(key, otherval) }
 				{ val == "<" } { }
-				{ val == "+" } {
+				{
 					if(stepval.class == Bus) {
 						stepval = stepval.getSynchronous;
 					};
 					if(otherval.class == Bus) {
 						otherval = otherval.getSynchronous;
 					};
-					step.put(key, stepval + otherval)
-				}
-				{ val == "*" } { step.put(key, stepval * otherval) }
-				{ val == "/" } {
-					if(otherval == 0) {
-						step.put(key, 0)
-					} {
-						step.put(key, stepval / otherval)
+
+					case
+					{ val == "+" } { step.put(key, stepval + otherval) }
+					{ val == "*" } { step.put(key, stepval * otherval) }
+					{ val == "/" } {
+						if(otherval == 0) {
+							step.put(key, 0)
+						} {
+							step.put(key, stepval / otherval)
+						}
 					}
+					{ val == "%" } { step.put(key, stepval % otherval) }
+					{ }
 				}
-				{ val == "%" } { step.put(key, stepval % otherval) }
-				{ }
 			};
 			
 			time = time + step.delta;
@@ -1813,8 +2247,8 @@ JSTidyCombRight : JSTidyNode {
 			other.dict.keys.do { |key| keys.add(key) };
 			
 			keys.do { |key|
-				var stepval = step.dict.at(key);
-				var otherval = other.dict.at(key);
+				var stepval = step.at(key);
+				var otherval = other.at(key);
 				
 				case
 				{ stepval.isNil } { step.put(key, otherval) }
@@ -1822,18 +2256,28 @@ JSTidyCombRight : JSTidyNode {
 				// now we know that both are not nil..
 				{ val == ">" } { }
 				{ val == "<" } { step.put(key, otherval) }
-				{ val == "+" } { step.put(key, stepval + otherval) }
-				{ val == "*" } { step.put(key, stepval * otherval) }
-				{ val == "/" }
 				{
-					if(stepval == 0) {
-						step.put(key, 0) // division by zero
-					} {
-						step.put(key, otherval / stepval)
+					if(stepval.class == Bus) {
+						stepval = stepval.getSynchronous;
+					};
+					if(otherval.class == Bus) {
+						otherval = otherval.getSynchronous;
+					};
+
+					case
+					{ val == "+" } { step.put(key, stepval + otherval) }
+					{ val == "*" } { step.put(key, stepval * otherval) }
+					{ val == "/" }
+					{
+						if(stepval == 0) {
+							step.put(key, 0) // division by zero
+						} {
+							step.put(key, otherval / stepval)
+						}
 					}
+					{ val == "%" } { step.put(key, otherval % stepval) }
+					{ }
 				}
-				{ val == "%" } { step.put(key, otherval % stepval) }
-				{ }
 			};
 
 			time = time + step.delta;
@@ -1909,42 +2353,52 @@ JSTidyCombBoth : JSTidyNode {
 			{ if(right.isNil) { step.put(key, value) } }
 			{ val == "<" }
 			{ if(right.notNil) { step.put(key, value) } }
-			{ val == "+" }
 			{
-				if((stepval.isString) or: (value.isString)) {
-					step.put(key, (stepval ? "") ++ (value ? ""));
-				} {
-					step.put(key, (stepval ? 0) + value);
+				if(stepval.class == Bus) {
+					stepval = stepval.getSynchronous;
+				};
+				if(value.class == Bus) {
+					value = value.getSynchronous;
+				};
+
+				case
+				{ val == "+" }
+				{
+					if((stepval.isString) or: (value.isString)) {
+						step.put(key, (stepval ? "") ++ (value ? ""));
+					} {
+						step.put(key, (stepval ? 0) + value);
+					}
 				}
-			}
-			{ val == "*" } { step.put(key, (stepval ? 1) * value) }
-			{ val == "/" }
-			{
-				if(right.isNil, {
-					if(value == 0, {
-						step.put(key, 0) // division by zero
+				{ val == "*" } { step.put(key, (stepval ? 1) * value) }
+				{ val == "/" }
+				{
+					if(right.isNil, {
+						if(value == 0, {
+							step.put(key, 0) // division by zero
+						}, {
+							step.put(key, (stepval ? 0) / value)
+						});
+					},{
+						var divider = (stepval ? 0);
+						if(divider == 0, {
+							step.put(key, 0) // division by zero
+						}, {
+							step.put(key, value / divider)
+						});
+					})
+				}
+				{ val == "%" }
+				{
+					if(right.isNil, {
+						step.put(key, (stepval ? 0) % value)
 					}, {
-						step.put(key, (stepval ? 0) / value)
-					});
-				},{
-					var divider = (stepval ? 0);
-					if(divider == 0, {
-						step.put(key, 0) // division by zero
-					}, {
-						step.put(key, value / divider)
-					});
-				})
-			}
-			{ val == "%" }
-			{
-				if(right.isNil, {
-					step.put(key, (stepval ? 0) % value)
-				}, {
-					step.put(key, value % (stepval ? 0))
-				})
-			}
-			{ }
-		};
+						step.put(key, value % (stepval ? 0))
+					})
+				}
+				{ }
+			};
+		}
 	}
 }
 
@@ -2153,6 +2607,8 @@ JSTidyFP_Off : JSTidyNode {
 		};
 
 		// add steps of the stack + alt cycle to PriorityQueue
+		// TODO: this causes an extra pause when switching trees,
+		// which is undesireable!
 		stack ?? { stack = [ JSTidyStep(0, shift, shift, "~", 0) ] };
 		time = 0;
 		stack.do { |step|
@@ -2185,6 +2641,8 @@ JSTidyFP_Off : JSTidyNode {
 	}
 }
 
+// maybe define the functions in setup.scd?
+
 // HIER
 // How can "rev" be used in both these sitations?
 // \a -- "chop 4" | "rev" | "s ride sn"
@@ -2193,10 +2651,7 @@ JSTidyFP_Off : JSTidyNode {
 JSTidyFP_Rev : JSTidyNode {
 	*new { |pattern| ^super.new("rev") }
 
-	get { |cycle, name|
-		cycle.steps = cycle.steps.reverse;
-		^cycle;
-	}
+	get { |cycle, name| ^cycle.steps_(cycle.steps.reverse) }
 }
 
 JSTidyFP_Slice : JSTidyNode {
@@ -2230,15 +2685,14 @@ JSTidyFP_Slice : JSTidyNode {
 	}
 }
 
-// \a -- "every 8 -1" >| "b 1 2 3 4" | etc; takes action on turns 7, 15, 23, etc
+// \a -- "every 8" >| "b 1 2 3 4" | etc; takes action on 7, 15, 23, etc
 JSTidyFP_Every : JSTidyNode {
-	var <>when, /*<>offset, */ turn;
+	var <>when, turn;
 
 	*new { |pattern|
 		var split = pattern.split($ );
 		^super.new("every")
 		.when_(split.at(0).asInteger);
-		//.offset_((split.at(1) ? "0").asInteger);
 	}
 
 	become_cur_after_add { ^true }
@@ -2254,16 +2708,6 @@ JSTidyFP_Every : JSTidyNode {
 				cycle = child.get(cycle, name);
 			};
 		};
-
-		/*
-		if(turn > 0) {
-			if(((turn + (0 - offset)) % when) == 0) {
-				children.drop(-1).do { |child|
-					cycle = child.get(cycle, name);
-				};
-			};
-		};
-		*/
 
 		^cycle;
 	}
@@ -2317,6 +2761,22 @@ JSTidyFP_Bin : JSTidyNode {
 	}
 }
 
+JSTidyFP_Toscale : JSTidyNode {
+	var >scale;
+	
+	*new { |pattern|
+		var instance = super.new("toscale");
+		instance.add(JSTidyPattern("1"));
+		^instance.scale_(pattern.split($ ).collect { |x| x.asInteger });
+	}
+
+	get { |cycle, name|
+		cycle = children.first.get(cycle, name);
+		cycle.steps.do { |step|	step.put(\toscale, scale) };
+		^cycle;
+	}
+}
+
 // chop samples in N parts
 // \a -- "chop 4" | "rev" | "s ride"
 JSTidyFP_Chop : JSTidyNode {
@@ -2342,13 +2802,6 @@ JSTidyFP_Chop : JSTidyNode {
 
 			step.delta_(step.delta / chop);
 			step.dur_(step.dur / chop);
-
-			/*
-			chop.do {
-				pq.put(time2, step);
-				time2 = time2 + step.dur;
-			}
-            */
 
 			// also set begin and end parameters
 			chop.do { |i|
@@ -2447,17 +2900,33 @@ JSTidyFP_Striate : JSTidyNode {
 }
 */
 
+// \a -- "def atone" - "adsr #2 20 0.4 500"
+// results in floats or buses put into the step
+JSTidyFP_List : JSTidyFP {
+	var <>str;
+	
+	*new { |val, str| ^super.new(val).str_(str) }
+
+	get { |cycle, name|
+		cycle.steps.do { |step|
+			str.split($ ).do { |substr, i|
+				var key = (val++(i+1)).asSymbol;
+				if(substr[0] == $=) {
+					step.put(key, this.string_to_control(substr));
+				} {
+					step.put(key, substr.asFloat)
+				}
+			}
+		};
+		^cycle;
+	}
+}
+
+// default function
 JSTidyFP : JSTidyNode {
 	*new { |val, pattern|
-		var abbr = [
-			\d, "def",
-			\b, "buf",
-			\s, "snd",
-			\n, "tidynote",
-			\leg, "legato",
-			\oct, "octave",
-		];
-		var instance = super.new(abbr.asDict.at(val.asSymbol) ? val);
+		val = Tidy.abbr.at(val.asSymbol) ? val;
+
 		if(val == "log") { pattern = "1" };
 		if(val == "once") { pattern = "1" };
 		if(val == "degrade" and: (pattern.size <= 0)) { pattern = "0.5" };
@@ -2469,8 +2938,11 @@ JSTidyFP : JSTidyNode {
 		if(val == "solo" and: (pattern.size <= 0)) { pattern = "1" };
 		if(val == "rot" and: (pattern.size <= 0)) { pattern = "1" };
 
-		if(pattern.size > 0) { instance.add(JSTidyPattern(pattern)) };
-		^instance;
+		if(pattern.size > 0) {
+			^super.new(val).add(JSTidyPattern(pattern))
+		};
+
+		^super.new(val);
 	}
 
 	get { |cycle, name|
@@ -2478,44 +2950,45 @@ JSTidyFP : JSTidyNode {
 		cycle = children.first.get(cycle, name);
 
 		cycle.steps.do { |step|
+
 			step.at(\str) !? { |str|
 				if(str[0] == $=) {
-					// "=xxx" : value comes from the controlbus of xxx
-					JSTidyControls.at(str.drop(1).asSymbol) !? { |control|
-						step.put(val.asSymbol, control.bus)
-					}
+					step.put(val.asSymbol, this.string_to_control(str));
 				} {
 					// interpret str depending on the function name (val)
 					case
 					{ str == "~" } { step.trig = 0 }
+					{ val == "buf" } { step.put(\buf, str.asInteger) }
+					{ val == "map" } { step.put(\map, str.asSymbol) }
+
 					{ val == "def" } { step.put(\def, str.asSymbol) }
 					{ val == "vowel" } { step.put(\vowel, str.asSymbol) }
-					// TODO: negative buf means reverse the sample
-					{ val == "buf" } { step.put(\buf, str.asInteger) }
 					{ val == "rot" } { step.put(\rot, str.asInteger) }
 					{ val == "vel" } { step.put(\vel, str.asFloat) }
-					{ val == "snd" } { step.put(\snd, str.asSymbol) }
 					{ val == "play" } { step.put(\play, str.asSymbol) }
 					{ val == "late" } { step.put(\latebeats, str.asFloat) }
-					{ val == "tidynote" } {
-						if("abcdefg".contains(str[0]), {
-							step.put(\midinote, JSTidyUtil.notemidi(str));
-						}, {
-							step.put(\degree, str.asFloat);
-						});
+					{ val == "note" } {
+						if("abcdefg".contains(str[0])) {
+							step.put(\note, this.string_to_note(str))
+						} {
+							step.put(\note, str.asFloat)
+						}
 					}
+					{ val == "degree" } { step.put(\degree, str.asFloat) }
 					{ val == "scale" } { step.put(\scale, str.asSymbol) }
 					{ val == "mix" } { step.put(\mix, str) }
+					{ val == "set" } { step.put(\set, str.asSymbol) }
 					{ step.put(val.asSymbol, str.asFloat) };
 				};
 			};
 
 			step.at(\num) !? { |num|
 				case
-				{ val == "snd"   } { step.put(\buf, num.asInteger) }
+				{ val == "map"   } { step.put(\buf, num.asInteger) }
 				{ val == "gain"  } { step.put(\gainsec, num.asInteger) }
 				{ val == "late"  } { step.put(\latemsecs, num.asInteger) }
-				{ }
+				// in your plugin you can use this value if you want
+				{ step.put((val++"_num").asSymbol, num.asInteger) }
 			};
 
 			step.put(\str, nil);
@@ -2524,6 +2997,48 @@ JSTidyFP : JSTidyNode {
 
 		^cycle;
 	}
+
+	// "=xxx" : value comes from the controlbus of xxx
+	string_to_control { |str, step|
+		JSTrack.at(str.drop(1).asSymbol) !? { |track|
+			if("legato;note".contains(val)) {
+				// TODO:
+				// this will give same value for all steps
+				// of the cycle! this is because "get" is called
+				// when the cycle is generated. After playing the
+				// first step of the cycle, the value on the control
+				// bus likely has changed a bit, and that new value is
+				// what you want for the second step of the cycle.
+				// in other words: calling getSynchronous her is too soon.
+				^track.bus.getSynchronous
+			};
+			^track.bus
+		};
+		^nil;
+	}
+	
+	// "c3#"
+	string_to_note { |str|
+		var octave = 4;
+		var add = 0;
+		var note = $c;
+		//
+		str.asString.do { |ch, i|
+			if(i <= 0) {
+				if("abcdefg".contains(ch)) { note = ch };
+			} {
+				if(ch == $#) { add = add + 1 };
+				if(ch == $b) { add = add - 1 };
+				if("12345678".contains(ch)) {
+					octave = (ch.ascii - $0.ascii).asInteger
+				};
+			}
+		};
+
+		^[\a, -3, \b, -1, \c, 0, \d, 2, \e, 4, \f, 5, \g, 7].asDict.at(
+			note.asSymbol
+		) + ((octave + 1) * 12) + add - 60;
+	}
 }
 
 
@@ -2531,37 +3046,22 @@ JSTidyFP : JSTidyNode {
 // HOOKS
 /////////////////////////////////////////////////////
 + Symbol {
-	defs    { if(this == \tidy) { JSTidyDefs.defs } }
-	samples { |bank| if(this == \tidy) { JSTidySamples.samples(bank) } }
-	audit   { |bank| if(this == \tidy) { JSTidySamples.audit(bank) } }
-	scales  { if(this == \tidy) { JSTidyUtil.postlist(Scale.names.sort) } }
-	scale   { |name| if(this == \tidy) { JSTidy.scale = name } }
-	hush    { |secs=0.02| JSTidyTracks.at(this) !? { |t| t.hush(secs) } }
-	mute    { |in| ^JSTidyTracks.mute(in ? this) }
-	solo    { |in| ^JSTidyTracks.solo(in ? this) }
-	unmute  { |in| ^JSTidyTracks.unmute(in ? this) }
-	unsolo  { |in| ^JSTidyTracks.unsolo(in ? this) }
-	bus {
-		case
-		{ (0..9).collect(_.asSymbol).includes(this) }
-		{ JSTidyEffects.at(this) !? { |fx| ^fx.bus } }
-		{ JSTidyControls.at(this) !? { |cv| ^cv.bus } }
-	}
+	hush { |secs=0.02| JSTrack.at(this) !? { |t| t.hush(secs) } }
+	//mute    { |in| ^JSTidyTracks.mute(in ? this) }
+	//solo    { |in| ^JSTidyTracks.solo(in ? this) }
+	//unmute  { |in| ^JSTidyTracks.unmute(in ? this) }
+	//unsolo  { |in| ^JSTidyTracks.unsolo(in ? this) }
+	bus { JSTrack.at(this) !? { |track| ^track.bus } }
+	node { JSTrack.at(this) !? { |track| ^track.node } }
+	asMap { ^this.bus.asMap }
 
-	end { |seconds=0.02|
-		if(this == \tidy) {
-			Routine({
-				"Tidy stopping..".postln;
-				JSTidyTracks.end(seconds);
-				(seconds * TempoClock.tempo).wait; // audio fades out
-				JSTidyEffects.end(seconds);
-				JSTidyControls.end(seconds);
-				JSTidySamples.end(seconds);
-				JSTidy.end_mainloop;
-			}).play;
-		}
-	}
-	
+	/*
+		send MIDICLOCK to some device (24 messages per beat):
+
+		1: \tidy .midiout
+		2: connect midi with jack
+		3: \clock -- "n 0!96" - "midiclock 1"
+	*/
 	midiout {
 		if(this == \tidy) {
 			Routine({
@@ -2574,156 +3074,40 @@ JSTidyFP : JSTidyNode {
 		};
 	}
 
+	/*
+        example                                        | rate    | bus
+		-----------------------------------------------+---------+-----
+		\pan -- { SinOsc.kr(0.1) }                     | control | out
+		\vel -- "cv 0.2 0.8" |+ "cv 0.1"               | control | out
+
+		\a -- [out, function, args, gain, target]      | audio   | in
+		\a -- [out, symbol, args, gain, target]        | audio   | in
+		\1 -- [out, function, args, gain, target]      | audio   | in
+		\2 -- [out, symbol, args, gain, target]        | audio   | in
+
+		\b -- "map bd snare" - "pan =pan" - "mix f41"  | audio   | -
+		\b -- { Out.ar(\a.bus, SinOsc.ar([300,298])) } | audio   | -
+	*/
 	-- { |in|
 		case
-		// effects: \0 .. \9 -- [out, func/symbol, params, gain, target]
-		// TODO: the out parameter IS the target! so no need for separate target
-		{ (0..9).collect(_.asSymbol).includes(this) }
-		{ ^JSTidyEffects.run(this, in) }
+
 		// audio tracks inside an array (seq/stack)
 		{ this == "".asSymbol }
-		{
-			^JSTidy(this).add_branch("--").add_func(in);
-		}
-		// audio tracks: \a .. \z -- "func pattern" - ..
-		{ (97..122).collect(_.asAscii).collect(_.asSymbol).includes(this) }
-		{
-			if(in.isString) {
-				^JSTidyTracks.atFail(this).add_branch("--").add_func(in)
-				//^JSTidy(this).add_branch("--").add_func(in)
-			};
+		{ ^JSTidy.new.add_branch("--").add_func(in) }
 
-			if(in.isArray) {
-				^JSTidyTracks.atFail(this).run(in);
-			};
-
-			// you could play a function to a bus..
-			
-			^"%% -- <func or array>".format("\\", this);
-		}
-		// control-rate functions:
-		{ in.isFunction }
-		{ ^JSTidyControls.atFail(this).run(in) }
-		// control-rate patterns (must have "cv" function):
+		// audio or control rate sequence
 		{ in.isString }
-		{ ^JSTidyControls.atFail(this).add_branch("--").add_func(in) }
-		{ ^"strange input: %% -- %".format("\\", this, in.class) }
-	}
+		{ ^JSTrack.atFail(this).add_branch("--").add_func(in) }
 
-	// create a mono version of a stereo sample
-	mono { |bank, index=1|
-		var s, buf = JSTidySamples.buf(bank, index);
-		if(buf.numChannels < 2) { ^"bufnum %".format(buf.bufnum) };
-		s = Server.default;
-		s.bind {
-			var buf2 = Buffer.alloc(s, buf.numFrames);
-			s.sync;
-			{
-				var ph = Line.ar(0, buf.numFrames, buf.duration, 1, 0, 2);
-				BufWr.ar(
-					BufRd.ar(2, buf.bufnum, ph, 0).sum,
-					buf2.bufnum,
-					ph,
-					0
-				);
-				"bufnum %".format(buf2.bufnum).postln;
-			}.play;
-		}
-	}
-	
-	mic { |name, cycles=1, nudge=0|
-		this.rec(name, cycles, 2, nudge);
-	}
-	
-	rec { |name, cycles, bus, nudge=0|
-		if(this != \tidy) { ^super.rec };
-		
-		Routine({
-			var seconds, buf, old, now, def;
-			var server = Server.default;
+		// [out, func or symbol, args, gain, target]
+        { in.isArray }
+		{ JSTrack.atFail(this).array(in) }
 
-			case { bus == 2 } { def = \mic } { def = \rec };
-			
-			cycles = cycles.asInteger;
-			seconds = cycles / TempoClock.tempo; // 1 cycle = 1 beat
-			"% % cycles (% seconds)".format(def, cycles, seconds).postln;
-			buf = Buffer.alloc(server, seconds * server.sampleRate, 1);
-			server.sync;
-			"% bufnum %".format(def, buf.bufnum).postln;
+		// audio or control rate function
+        { in.isFunction }
+		{ JSTrack.atFail(this).function(in) }
 
-			JSTidy.quantize;
-			
-			// start synth 1 cycle from now + start countdown now
-			// start synth a little later, as input signal will take some
-			// time to enter supercollider.
-			server.makeBundle(1 / TempoClock.tempo + nudge, {
-				Synth(def, [buf: buf, in: bus], nil, \addToTail);
-			});
-
-			4.do { |i| "..%".format(4 - i).postln; (1/4).wait };
-			"..go!".postln;
-			
-			// countup in post window during \rec synth lifetime
-			(cycles * 4).do { |i| "--%".format(i+1).postln; (1/4).wait; };
-
-			// store the new recording; free old one if any
-			old = Library.at(\tidyrec, name.asSymbol);
-			Library.put(\tidyrec, name.asSymbol, buf);
-			old !? { |b| b.free };
-			
-			"record finished".postln;
-		}).play;
-	}
-
-	save { |name, saveasname|
-		Library.at(\tidyrec, name.asSymbol) !? { |buffer|
-			var path;
-			saveasname = saveasname ? name;
-			saveasname = saveasname.asString;
-			
-			if(saveasname.endsWith(".wav").not) {
-				saveasname = saveasname ++ ".wav";
-			};
-			
-			path = ("~/" ++ saveasname).standardizePath;
-			
-			"Writing %% to %".format("\\", name, path.quote).postln;
-			buffer.write(path, "wav");
-		};
+		{ ^"%% -- <string or func or array>".format("\\", this) };
 	}
 }
-
-/*
-Midiin + rec
-Kbdin + rec
-CmdPeriod behaviour
-euclids inside <> do not seem to work (but maybe illogical to want)
-@2 inside <> is tricky too
-
-idea: sample - reverse - add delays - reverse back
-idea: sample - reverse - reverb - resample - loop
-looper: start, loop middle of sample (crossfade), at release play till end
-
-idea: "dup 3" | ... would repeat all cycles 3 times
-idea: "do 0 1 6 7 5 6" | ... would play the given cycle numbers
-how to implement swing? "b [1 ~ 2]@2 3 4"
-idea: "seed 1234" : control randomness;
-key tracking: lpf = (lpf + (kt * freq))
-mini notation parser more robust: monitor index through recursive looping
-idea: "b [0 1 2 3 ~]??" means "pick one of them randomly"
-make vital classic bend VOsc wavetables: sine - tri - saw - pulse - pulsew
-log: maybe add a parametername to log to only log that
-make all sample / synthdef volumes RIGHT
-
-study these:
-{
-	var sig = WhiteNoise.ar(0.1);
-	BLowShelf.ar(sig, MouseX.kr(300, 3000) * 0.5, 1.0, -60) +
-	BHiShelf.ar(sig, MouseX.kr(300, 3000) / 0.5, 1.0, -60)
-}.play
-
-movie score: intro,theme,build,climax,theme(emotional),intro(conclusive)
-connect to animatron? with osc?
-meltdown function: lower volume + global freq multiplier + global tempo
-*/
 
