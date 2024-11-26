@@ -3,6 +3,25 @@ Tidy {
 	classvar samples, buffers, recordings, prevfreq, abbreviations;
 	classvar <>log=0;   // to (de)activate logging
 
+	*doc {
+		[
+			"abbr   : abbreviate: Tidy.abbr([\\leg, \\legato])",
+			"setup  : setup plugins, synthdefs, abbreviations, etc",
+			"load   : load samples: Tidy.load(\"~/samples\")",
+			"sample : get sample buffer: Tidy.sample(\\bd, 2)",
+			"audit  : audit samples: Tidy.audit(\\sn)",
+			"def    : define synthdef: Tidy.def(\n, func, variants)",
+			"bpm    : Tidy.bpm(110) or Tidy.bpm",
+			"cps    : Tidy.cps(0.3) or Tidy.cps",
+			"bpm    : Tidy.quant(2) or Tidy.quant",
+			"buffer : alloc buffer xx cycles: Tidy.buffer(2)",
+			"mic    : record mic in buffer: Tidy.mic(\\n, 2, 0.25)",
+			"rec    : record bus in buffer: Tidy.rec(\\n, 2, 0.1)",
+			"save   : save buffer: Tidy.save(\\n, \"~/x.wav\")",
+			"end    : end all with fadeout: Tidy.end(12)",
+		].do { |str| str.postln }
+	}
+	
 	*abbr { |array|
 		array ?? { ^abbreviations };
 		abbreviations.putAll(array.asDict)
