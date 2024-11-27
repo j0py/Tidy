@@ -1,3 +1,5 @@
+// TODO: document the functions
+// TODO: schelp docs for SC
 
 Tidy {
 	classvar samples, buffers, recordings, prevfreq, abbreviations;
