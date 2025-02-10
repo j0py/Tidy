@@ -1,294 +1,31 @@
 TITLE:: Tidy
-summary:: Tidal Cycles -like sequencer for SuperCollider
-categories:: sequencing
-related:: (none)
+summary:: Use Tidal Cycles syntax in SuperCollider
+categories:: mini-notation, sequencing
+related:: 
 
 DESCRIPTION::
-With Tidy you can use mini-notation and function/pattern sequencing much like in Tidal Cycles. Some small changes were necessary in the syntax, to circumvent the SC Interpreter:
-
-```
-d1 $ sound "bd snare"
-```
-becomes:
-```
-\d -- "sound bd snare"
-```
- 
-
-CLASSMETHODS::
-
-METHOD:: solo
-(describe method here)
-
-ARGUMENT:: str_or_symbol
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: setup
-(describe method here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: bpm
-(describe method here)
-
-ARGUMENT:: bpm
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: unsolo
-(describe method here)
-
-ARGUMENT:: str_or_symbol
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: unload
-(describe method here)
-
-ARGUMENT:: folder
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: audit
-(describe method here)
-
-ARGUMENT:: map
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: log
-(describe method here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: abbr
-(describe method here)
-
-ARGUMENT:: array
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: end
-(describe method here)
-
-ARGUMENT:: seconds
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: add_step_plugin
-(describe method here)
-
-ARGUMENT:: key
-(describe argument here)
-
-ARGUMENT:: func
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: prevfreq
-(describe method here)
-
-ARGUMENT:: key
-(describe argument here)
-
-ARGUMENT:: value
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: mute
-(describe method here)
-
-ARGUMENT:: str_or_symbol
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: unmute
-(describe method here)
-
-ARGUMENT:: str_or_symbol
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: add_cycle_plugin
-(describe method here)
-
-ARGUMENT:: key
-(describe argument here)
-
-ARGUMENT:: func
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: alter_step
-(describe method here)
-
-ARGUMENT:: track
-(describe argument here)
-
-ARGUMENT:: step
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: save
-(describe method here)
-
-ARGUMENT:: name
-(describe argument here)
-
-ARGUMENT:: saveasname
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: cps
-(describe method here)
-
-ARGUMENT:: cps
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: doc
-(describe method here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: sample
-(describe method here)
-
-ARGUMENT:: map
-(describe argument here)
-
-ARGUMENT:: index
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: alter_cycle
-(describe method here)
-
-ARGUMENT:: track
-(describe argument here)
-
-ARGUMENT:: cycle
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: recordings
-(describe method here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: buffer
-(describe method here)
-
-ARGUMENT:: cycles
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: quant
-(describe method here)
-
-ARGUMENT:: quant
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: def
-(describe method here)
-
-ARGUMENT:: name
-(describe argument here)
-
-ARGUMENT:: func
-(describe argument here)
-
-ARGUMENT:: variants
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: postlist
-(describe method here)
-
-ARGUMENT:: list
-(describe argument here)
-
-ARGUMENT:: sep
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: postline
-(describe method here)
-
-ARGUMENT:: w
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: mic
-(describe method here)
-
-ARGUMENT:: name
-(describe argument here)
-
-ARGUMENT:: cycles
-(describe argument here)
-
-ARGUMENT:: nudge
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: load
-(describe method here)
-
-ARGUMENT:: folder
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-METHOD:: rec
-(describe method here)
-
-ARGUMENT:: name
-(describe argument here)
-
-ARGUMENT:: cycles
-(describe argument here)
-
-ARGUMENT:: bus
-(describe argument here)
-
-ARGUMENT:: nudge
-(describe argument here)
-
-returns:: (describe returnvalue here)
-
-
-INSTANCEMETHODS::
-
-
-EXAMPLES::
+Enables combining function/mini-notation-pattern pairs to trigger notes directly in SuperCollider.
 
 code::
-(some example code)
+\a -- "buf 1 <2 4>/3*2" - "snd kit1" - "mix f4"
 ::
+
+This would play buffer indexes 1,2,3,4 with some rhythm from the samples folder named "kit1" and send the audio to \0 
+bus with gain 1, and to the \1 bus with gain 0.25.
+Re-evaluating this line of code will activate your changes at the next quantisation point.
+
+The "-" operator is actually the "|>" operator.
+In Tidal Cycles they use the "#" operator, but the Interpreter does not accept that character.
+All the other combining operators are as in Tidal Cycles: |>, |<, |>|, |+, |/, etc.
+Getting the structure from both sides can be done in Tidal Cycles with or without the vertical bars: "|*|" is 
+the same as "*". In Tidy this is not always possible in the Interpreter.
+
+The "$" operator from Tidal Cycles is also not possible in SuperCollider, and has been replaced by the "--"
+and "|" operators.
+
+code::
+\a -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 5 6" - "snd kit1" - "gain 0.5"
+::
+
+CLASSMETHODS::
 
