@@ -126,20 +126,19 @@ JSTrack : JSTidy {
 		}).play;
 	}
 
-	// \a -- [out, func_or_symbol, args, gain, target]
+	// \a -- [out, func_or_symbol, args, target]
 	// target should be the out if that is a symbol
-	array { |input|
+	old_array { |input|
 		var server = Server.default;
 		var out, what, gain, args, target, old, addAction;
 
 		if(((input.class == Array) and: (input.size >= 2)).not) {
-			^"%% -- [out, func/def, [], gain, target]".format("\\", "0");
+			^"%% -- [out, func/def, [], target]".format("\\", "0");
 		};
 
 		out = input[0];
 		args = input[2] ? [];
-		target = input[4];
-		args = args ++ [\gain, input[3] ? 1];
+		target = input[3];
 		args = args ++ [\in, bus.index];
 		
 		Routine({
@@ -188,11 +187,106 @@ JSTrack : JSTidy {
 					if(SynthDescLib.at(def).notNil) {
 						// the synthdef should have a sustaining envelope
 						// with \gate arg (and fade in/fade out somewhat)
-						// the synthdef must use an \in and \outx bus argument
+						// the synthdef must use an \in and \out bus argument
 						// the synthdef may use the \gain argument
 						node = Synth(
 							defName: input[1].asSymbol,
 							args: args ++ [\out, out],
+							target: target,
+							addAction: addAction
+						);
+						
+						old !? { old.release };
+					} {
+						"synthdef % unknown".format(def).postln;
+					}
+				}
+			}
+		}).play;
+	}
+
+	// \2 -- [mix, func_or_symbol, args, target]
+	array { |input|
+		var server = Server.default;
+		var mix, what, gain, args, target, old, addAction;
+
+		if(((input.class == Array) and: (input.size >= 2)).not) {
+			^"%% -- [mix, func/def, [], target]".format("\\", "0");
+		};
+
+		mix = input[0];
+		args = input[2] ? [];
+		target = input[3];
+		args = args ++ [\in, bus.index];
+		
+		Routine({
+			case
+			{ mix.isInteger } {	args = args ++ [\out1, 0, \gain1, 1] }
+			{
+				var send=1;
+				mix.asString.do { |gain, i|
+					gain = gain.digit.linlin(0, 15, 0, 1).asFloat;
+					if(gain > 0) {
+						var track = JSTrack.at(i.asSymbol);
+						track !? {
+							args = args ++ [
+								("out"++send).asSymbol,
+								track.bus.index,
+								("gain"++send).asSymbol,
+								gain
+							];
+
+							send = send + 1;
+						}
+					}
+				}
+			};
+			
+			// make bus mapping possible
+			args = args.collect({ |el, i|
+				var result = el;
+
+				if(((i % 2) == 1) and: (el.class == Symbol)) {
+					JSTrack.at(el) !? { |t|	result = t.bus.asMap }
+				};
+
+				result;
+			});
+
+			old = node;
+			target !? { target = JSTrack.at(target).node };
+			target ?? { target = old };
+			addAction = \addToHead;
+			target !? { addAction = \addBefore };
+
+			Server.default.bind {
+				case
+				{ input[1].isFunction }
+				{
+					// the function must expect an \in argument
+					// the function may use the \gain argument
+					/*
+					node = input[1].play(
+						target: target,
+						addAction: addAction,
+						outbus: out,
+						fadeTime: 0.5,
+						args: args
+					);
+					*/
+					old !? { old.release };
+				}
+				{
+					var def = input[1].asSymbol;
+					
+					if(SynthDescLib.at(def).notNil) {
+						// the synthdef should have a sustaining envelope
+						// with \gate arg (and fade in/fade out somewhat)
+						// the synthdef must use an \in and \out bus argument
+						// the synthdef may use the \gain argument
+						node = Synth(
+							defName: input[1].asSymbol,
+							args: args.postln,
 							target: target,
 							addAction: addAction
 						);

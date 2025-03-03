@@ -83,7 +83,7 @@ JSTidyStep {
 	put_sends {
 		var send, mix, fx;
 
-		// - "mix f4" - : gains for fx 0 and 1
+		// - "mix f4" - : gains for 0 and fx 1
 		mix = 0!10;
 		(dict.at(\mix) ? "f").do { |gain, i|
 			mix[i] = gain.digit.linlin(0, 15, 0, 1).asFloat;
@@ -97,15 +97,19 @@ JSTidyStep {
 		// distribute the values over the available outputs of the synth
 		send = 1;
 		10.do { |i|
-			JSTrack.at(i.asSymbol) !? { |effect|
+			JSTrack.at(i.asSymbol) !? { |t|
+				var index = t.bus.index;
+
 				case
 				{ fx[i].notNil } {
-					this.put(("out" ++ send).asSymbol, effect.bus.index);
+					//"i % send % fx % %".format(i, send, index, fx[i]).postln;
+					this.put(("out" ++ send).asSymbol, index);
 					this.put(("gain" ++ send).asSymbol, fx[i]);
 					send = send + 1;
 				}
 				{ mix[i] > 0 } {
-					this.put(("out" ++ send).asSymbol, effect.bus.index);
+					//"i % send % mix % %".format(i, send, index, mix[i]).postln;
+					this.put(("out" ++ send).asSymbol, index);
 					this.put(("gain" ++ send).asSymbol, mix[i]);
 					send = send + 1;
 				}

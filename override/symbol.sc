@@ -10,25 +10,6 @@
 	asMap { ^this.bus.asMap }
 
 	/*
-		send MIDICLOCK to some device (24 messages per beat):
-
-		1: \tidy .midiout
-		2: connect midi with jack
-		3: \clock -- "n 0!96" - "midiclock 1"
-	*/
-	midiout {
-		if(this == \tidy) {
-			Routine({
-				// connect with QJackCtl to CH345 device ("OUT" means out)
-				MIDIClient.init;
-				Server.default.sync;
-				Library.put(\tidy, \midiout, MIDIOut(0));
-				"*** midiout ready : connect using jack now ***".postln;
-			}).play;
-		};
-	}
-
-	/*
         example                                        | rate    | bus
 		-----------------------------------------------+---------+-----
 		\pan -- { SinOsc.kr(0.1) }                     | control | out
@@ -52,7 +33,7 @@
 		// audio or control rate sequence
 		{ in.isString }
 		{ ^JSTrack.atFail(this).add_branch("--").add_func(in) }
-
+		
 		// [out, func or symbol, args, gain, target]
         { in.isArray }
 		{ JSTrack.atFail(this).array(in) }

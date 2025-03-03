@@ -4,7 +4,7 @@
 Tidy {
 	classvar samples, buffers, <recordings, prevfreq, abbreviations;
 	classvar <>log=0;   // to (de)activate logging
-	classvar step_plugins, cycle_plugins;
+	classvar step_plugins, cycle_plugins, <>midi_out;
 	
 	*doc {
 		[
@@ -128,7 +128,9 @@ Tidy {
 			rate = step.at(\rate) ? 1;
 
 			step.at(\map) !? { |map|
-				var index = (step.at(\buf) ? 1).asInteger;
+				var index = (step.at(\buf) ? 1);
+				if(index.isKindOf(Bus)) { index = index.getSynchronous };
+				index = index.asInteger;
 				if(index <= -1) { rate = rate * -1 };
 				buf = Tidy.sample(map, abs(index));
 				buf ?? { "buf % % unknown".format(map, index).postln };
@@ -378,16 +380,22 @@ Tidy {
 		// some default effect synthdefs
 		
 		SynthDef(\id, {
-			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(1, 1);
 			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
-			Out.ar(\out.kr(0), sig);
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}).add;
 
 		SynthDef(\gverb, {
-			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(1, 1);
 			sig = GVerb.ar(sig, \roomsize.kr(10), 3, drylevel: 0);
 			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
-			Out.ar(\out.kr(0), sig);
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}).add;
 	}
 
@@ -668,6 +676,23 @@ Tidy {
 	*unsolo { |str_or_symbol| JSMute.unsolo(str_or_symbol) }
 	*mute { |str_or_symbol| JSMute.mute(str_or_symbol) }
 	*unmute { |str_or_symbol| JSMute.unmute(str_or_symbol) }
+
+	/*
+		send MIDICLOCK to some device (24 messages per beat):
+
+		1: \tidy .midiout
+		2: connect midi with jack
+		3: \clock -- "n 0!96" - "midiclock 1"
+	*/
+	*midiout {
+		Routine({
+			// connect with QJackCtl to CH345 device ("OUT" means out)
+			MIDIClient.init;
+			Server.default.sync;
+			Tidy.midi_out = MIDIOut(0);
+			"*** midiout ready : connect using jack now ***".postln;
+		}).play;
+	}
 }
 
 
