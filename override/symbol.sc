@@ -9,9 +9,7 @@
 	node { JSTrack.at(this) !? { |track| ^track.node } }
 	asMap { ^this.bus.asMap }
 
-  << { |in|
-		^JSTrack.atFail(this).params(in);
-  }
+  << { |in| ^JSTrack.atFail(this).params(in) }
 
 	-- { |in|
 		case
