@@ -15,6 +15,7 @@ JSTidyCycle {
 		this.make_index;
 	}
 	
+  // TODO move to plugin
 	rotate { |rot|
 		if(rot != 0) { this.steps_(steps.rotate(rot)) }
 	}

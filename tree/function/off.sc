@@ -1,6 +1,6 @@
 // \a -- "off 0.25" |+ "n 7" | ..
 // add timeshifted, altered layer
-// todo: the shift time should be patternable (e.g. "off <0.25 0.375>" - bla bla)
+// TODO the shift time should be patternable (e.g. "off <0.25 0.375>" - bla bla)
 JSTidyFP_Off : JSTidyNode {
 	var <>shift, <>stack;
 

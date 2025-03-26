@@ -4,8 +4,8 @@
 Tidy {
 	classvar samples, buffers, <recordings, prevfreq, abbreviations;
 	classvar <>log=0;   // to (de)activate logging
-	classvar step_plugins, cycle_plugins;
-	
+	classvar step_plugins, cycle_plugins, <>midi_out;
+
 	*doc {
 		[
 			"abbr   : abbreviate: Tidy.abbr([\\leg, \\legato])",
@@ -30,17 +30,17 @@ Tidy {
 	// - "lpf #200 0.1 0.2 0.3 3" -
 	// do NOT supply a kr default if you don't know it;
 	// this gives a SynthDef a chance to do that!
-	*adsr { |name, gate, doneAction=0, default=0|
+	*adsr { |name, gate, doneAction=0, default|
 		^Env.adsr(
-			(name++1).asSymbol.kr(0),            // attack
-			(name++2).asSymbol.kr(0),            // decay
-			(name++3).asSymbol.kr(1),            // sustainlevel
-			(name++4).asSymbol.kr(0).max(0.02),  // release
-			name.asSymbol.kr(default),           // peak
-			(name++5).asSymbol.kr(-4)            // curve
+			(name++1).asSymbol.kr(0),           // attack
+			(name++2).asSymbol.kr(0),           // decay
+			(name++3).asSymbol.kr(1),           // sustainlevel
+			(name++4).asSymbol.kr(0).max(0.1),  // release
+			name.asSymbol.kr(default),          // peak
+			(name++5).asSymbol.kr(-4)           // curve
 		).kr(doneAction, gate);
 	}
-	
+
 	*abbr { |array|
 		array ?? { ^abbreviations };
 		abbreviations.putAll(array.asDict)
@@ -55,12 +55,12 @@ Tidy {
 		step_plugins = step_plugins ? JSPlugins.new;
 		step_plugins.alter(track, step)
 	}
-	
+
 	*add_cycle_plugin { |key, func|
 		cycle_plugins = cycle_plugins ? JSPlugins.new;
 		cycle_plugins.add(key, func);
 	}
-	
+
 	*alter_cycle { |track, cycle|
 		cycle_plugins = cycle_plugins ? JSPlugins.new;
 		cycle_plugins.alter(track, cycle)
@@ -74,10 +74,10 @@ Tidy {
 			\m, \map, \snd, \map, \s, \map,
 			\b, \buf,
 		].asDict;
-		
+
 		// FREQ
 		// n(ote) = midinote - 60
-	
+
 		this.add_step_plugin(\freq, { |track, step|
 			case
 			{ step.at(\freq).notNil } { /* do nothing */ }
@@ -119,7 +119,7 @@ Tidy {
 		this.add_step_plugin(\prevfreq, { |track, step|
 			var prevfreq = Tidy.prevfreq(track);
 			step.put(\prevfreq, prevfreq ? step.at(\freq));
-			Tidy.prevfreq(track, step.at(\freq)); 
+			Tidy.prevfreq(track, step.at(\freq));
 		});
 
 		this.add_step_plugin(\sample, { |track, step|
@@ -128,7 +128,9 @@ Tidy {
 			rate = step.at(\rate) ? 1;
 
 			step.at(\map) !? { |map|
-				var index = (step.at(\buf) ? 1).asInteger;
+				var index = (step.at(\buf) ? 1);
+				if(index.isKindOf(Bus)) { index = index.getSynchronous };
+				index = index.asInteger;
 				if(index <= -1) { rate = rate * -1 };
 				buf = Tidy.sample(map, abs(index));
 				buf ?? { "buf % % unknown".format(map, index).postln };
@@ -138,7 +140,7 @@ Tidy {
 				buf = Tidy.recordings.at(rec.asSymbol);
 				buf ?? { "rec buf % unknown".format(rec).postln };
 			};
-			
+
 			buf !? {
 				var s = Server.default;
 				var begin, end, legato, bufbeats, bufseconds, sustainbeats;
@@ -174,7 +176,7 @@ Tidy {
 					};
 					sustainbeats = bufbeats * stretch;
 				};
-				
+
 				step.put(\sustainbeats, sustainbeats);
 
 				// flip: align reversed sample perfectly to the right
@@ -192,7 +194,7 @@ Tidy {
 				// this can be convenient for Lag or Env
 				step.put(\sustain, sustainbeats / TempoClock.tempo);
 			};
-			
+
 			step.put(\rate, rate);
 		});
 
@@ -224,7 +226,7 @@ Tidy {
 						step.put(\def, \playbuf2)
 					};
 				};
-				
+
 				if(step.has(\rumble)) {
 					step.put(\def, \rumble1);
 					if((step[\bufchannels] ?? 1) > 1) {
@@ -233,10 +235,10 @@ Tidy {
 				}
 			}
 		});
-		
+
 		/*
 			each step can be "filled" using the <dur> of the following
-			rest steps, if any. the step itself sould have a value for
+			rest steps, if any. the step itself should have a value for
 			"fill" (integer, min 1).
 			a value of 1 for "fill" means do nothing.
 			a value of 2 means "if next step is a rest, add its dur to yours"
@@ -249,7 +251,7 @@ Tidy {
 
 				if(fill.isKindOf(Bus)) { fill = fill.getSynchronous };
 				fill = max(1, fill);
-				
+
 				case
 				{ step.trig > 0 } {
 					last = step;
@@ -264,24 +266,24 @@ Tidy {
 				};
 				steps.add(step);
 			};
-			
+
 			cycle.steps_(steps.asArray);
 		});
-		
+
 		// define synthdefs
-		
+
 		SynthDef(\mic, {
 			var bufnum = \buf.kr(0);
 			var in = In.ar(\in.kr(0), 2);
 
 			// make mono to use it with grainbuf / tgrains
 			in = [in.sum];
-			
+
 			// highpass to avoid mic rumble
 			in = HPF.ar(in, 200);
 			in = HPF.ar(in, 100);
 			in = LeakDC.ar(in);
-			
+
 			RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
 		}).add;
 
@@ -307,7 +309,7 @@ Tidy {
 			sig = Balance2.ar(sig[0], sig[1], \pan.kr(0));
 			sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
 		});
-		
+
 		this.def(\playbuf1, {
 			arg freq, vel, gate, sustain;
 			var sig, rate, bufnum, begin, att, rel, crv;
@@ -376,18 +378,24 @@ Tidy {
 		});
 
 		// some default effect synthdefs
-		
+
 		SynthDef(\id, {
-			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(1, 1);
 			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
-			Out.ar(\out.kr(0), sig);
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}).add;
 
 		SynthDef(\gverb, {
-			var sig = In.ar(\in.kr(0), 2) * \gain.kr(0, 1);
+			var sig = In.ar(\in.kr(0), 2) * \gain.kr(1, 1);
 			sig = GVerb.ar(sig, \roomsize.kr(10), 3, drylevel: 0);
 			sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
-			Out.ar(\out.kr(0), sig);
+			Out.ar(\out1.kr(0), sig * \gain1.kr(0));
+			Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+			Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+			Out.ar(\out4.kr(0), sig * \gain4.kr(0));
 		}).add;
 	}
 
@@ -396,9 +404,9 @@ Tidy {
 		value ?? { ^prevfreq.at(key) };
 		prevfreq.put(key, value);
 	}
-	
+
 	*postline { |w=38| "".padLeft(w+6, "-").postln }
-	
+
 	*postlist { |list, sep|
 		var w = 38, str = ",".ccatList(list).replace(",, ", "");
 		sep = sep ? " - ";
@@ -522,13 +530,9 @@ Tidy {
 
 			// gain and mute use kr buses so that you can mute / fade
 			// long running synths while they are still playing
-			sig = sig * \amp.kr(1); // accents in patterns or modulation
+			sig = sig * Tidy.adsr("amp", gate, 0, 1); // adsr
 			sig = sig * \gain.kr(1); // fade in/out ("gain 0.3:7")
-			sig = sig * \cvgain.kr(1); // for (midi) controller
-			sig = sig * \cvenable.kr(1); // for (midi) controller
 			sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) - 1); // inverted
-
-			//sig = NumChannels.ar(sig, 2); // make sig always stereo! why?
 
 			lpf = Tidy.adsr("lpf", gate, 0, 20000).clip(20, 20000);
 			// key tracking (using velocity too)
@@ -543,6 +547,18 @@ Tidy {
 		}, variants: variants).add;
 	}
 
+	*fx { |name, func|
+		^SynthDef(name, {
+			var sig = SynthDef.wrap(func, [], [In.ar(\in.kr(0), 2)]);
+      // make sure that this node can be released
+      sig = sig * Env.asr(0.2, 1, 0.2).kr(2, \gate.kr(1));
+      Out.ar(\out1.kr(0), sig * \gain1.kr(0).clip(0, 1));
+      Out.ar(\out2.kr(0), sig * \gain2.kr(0).clip(0, 1));
+      Out.ar(\out3.kr(0), sig * \gain3.kr(0).clip(0, 1));
+      Out.ar(\out4.kr(0), sig * \gain4.kr(0).clip(0, 1));
+    }).add;
+	}
+
 	*bpm { |bpm|
 		bpm !? {
 			bpm = bpm.asInteger;
@@ -553,7 +569,7 @@ Tidy {
 		} ?? { bpm = TempoClock.tempo * 60 * 4 };
 		"bpm: % (% cps)".format(bpm, (bpm / 60 / 4).round(0.01)).postln;
 	}
-	
+
 	*cps { |cps|
 		cps !? {
 			cps = cps.asFloat;
@@ -576,7 +592,7 @@ Tidy {
 		"quant: %".format(quant.round(0.01)).postln;
 	}
 
-	*buffer { |cycles|
+	*buffer { |cycles, channels = 1|
 		buffers = buffers ? List.new;
 		case
 		{ cycles.notNil } {
@@ -585,7 +601,8 @@ Tidy {
 				var s = Server.default;
 				var b = Buffer.alloc(
 					s,
-					cycles * s.sampleRate / TempoClock.tempo
+					cycles * s.sampleRate / TempoClock.tempo,
+          channels
 				);
 				(0.5 * TempoClock.tempo).wait;
 				b.clear;
@@ -595,18 +612,18 @@ Tidy {
 			"audio buffer % cycles".format(cycles);
 		} { "audio buffers:\n" ++ buffers.join("\n") }
 	}
-		
+
 	*mic { |name, cycles=1, nudge=0|
 		this.rec(name, cycles, 2, nudge);
 	}
-	
+
 	*rec { |name, cycles, bus, nudge=0|
 		recordings = recordings ? Dictionary.new;
 		Routine({
 			var seconds, buf, old, now, def, s = Server.default;
 
 			case { bus == 2 } { def = \mic } { def = \rec };
-			
+
 			cycles = cycles.asInteger;
 			seconds = cycles / TempoClock.tempo; // 1 cycle = 1 beat
 			"% % cycles (% seconds)".format(def, cycles, seconds).postln;
@@ -615,7 +632,7 @@ Tidy {
 			"% bufnum %".format(def, buf.bufnum).postln;
 
 			JSQuant.quantize;
-			
+
 			// start synth 1 cycle from now + start countdown now
 			// start synth a little later, as input signal will take some
 			// time to enter supercollider.
@@ -625,7 +642,7 @@ Tidy {
 
 			4.do { |i| "..%".format(4 - i).postln; (1/4).wait };
 			"..go!".postln;
-			
+
 			// countup in post window during \rec synth lifetime
 			(cycles * 4).do { |i| "--%".format(i+1).postln; (1/4).wait; };
 
@@ -633,7 +650,7 @@ Tidy {
 			old = recordings.at(name.asSymbol);
 			recordings.put(name.asSymbol, buf);
 			old !? { |b| b.free };
-			
+
 			"record finished".postln;
 		}).play;
 	}
@@ -643,13 +660,13 @@ Tidy {
 			var path;
 			saveasname = saveasname ? name;
 			saveasname = saveasname.asString;
-			
+
 			if(saveasname.endsWith(".wav").not) {
 				saveasname = saveasname ++ ".wav";
 			};
-			
+
 			path = ("~/" ++ saveasname).standardizePath;
-			
+
 			"Writing %% to %".format("\\", name, path.quote).postln;
 			buffer.write(path, "wav");
 		};
@@ -668,11 +685,22 @@ Tidy {
 	*unsolo { |str_or_symbol| JSMute.unsolo(str_or_symbol) }
 	*mute { |str_or_symbol| JSMute.mute(str_or_symbol) }
 	*unmute { |str_or_symbol| JSMute.unmute(str_or_symbol) }
+
+	/*
+		send MIDICLOCK to some device (24 messages per beat):
+
+		1: \tidy .midiout
+		2: connect midi with jack
+		3: \clock -- "n 0!96" - "midiclock 1"
+	*/
+	*midiout {
+		Routine({
+			// connect with QJackCtl to CH345 device ("OUT" means out)
+			MIDIClient.init;
+			Server.default.sync;
+			Tidy.midi_out = MIDIOut(0);
+			"*** midiout ready : connect using jack now ***".postln;
+		}).play;
+	}
 }
-
-
-
-
-
-
 

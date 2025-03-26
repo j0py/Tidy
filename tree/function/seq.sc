@@ -15,6 +15,18 @@ JSTidyFP_Seq : JSTidyNode {
 		var index;
 		var seq; // a queue of steps
 
+    // if you change some parameters in the sequence, and
+    // re-evaluate, then a new tree is built in memory.
+    // this node object will be replaced by a new one then.
+    // so if you then want to continue in the sequence, 
+    // you cannot 'remember' where you were in the sequence
+    // inside this object. i chose to remember in in the
+    // global Library, and that's why i need the track name.
+    //
+    // if you changed the pattern and then re-evaluate, then
+    // the remembered sequence has become invalid, and must
+    // be cleared. so i have to remember the pattern string
+    // too..
 		seq = Library.at(\tidyseq, name.asSymbol, \seq);
 		
 		Library.at(\tidyseq, name.asSymbol, \pattern) !? { |pat|

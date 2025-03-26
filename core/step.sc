@@ -32,17 +32,6 @@ JSTidyStep {
 		^val;
 	}
 
-	/* send your dict as parameters to a node (fx or track)
-	play_set { |name, track|
-		if((dict.at(\degrade) ? 1).coin.not) { ^this };
-		if(trig <= 0) { ^this };
-
-		//JSPlugins.alter(name, this); // all plugins do their thing
-
-		dict.at(\set).asSymbol.setarr(dict.asPairs);
-	}
-	*/
-
 	play_midiout {
 		dict.at(\midiout) !? { |chan|
 			Library.at(\tidy, \midiout).noteOn(
@@ -63,7 +52,7 @@ JSTidyStep {
 	
 	/*
 		all synthdefs define outx/gainx control pairs, so that some
-		of the audio can be sent to effect buses:
+		of the audio can be sent to effect buses.
 
 		Out.ar(\out1.kr(0), sig * \gain1.kr(0))
 
@@ -79,11 +68,12 @@ JSTidyStep {
 		this way of sending audio to the effects has some advantages:
 		- the effect synth is instantiated once, so cpu effective
 		- the sends to the effects are patternable
-    */
+  */
+/*
 	put_sends {
 		var send, mix, fx;
 
-		// - "mix f4" - : gains for fx 0 and 1
+		// - "mix f4" - : gains for 0 and fx 1
 		mix = 0!10;
 		(dict.at(\mix) ? "f").do { |gain, i|
 			mix[i] = gain.digit.linlin(0, 15, 0, 1).asFloat;
@@ -97,15 +87,19 @@ JSTidyStep {
 		// distribute the values over the available outputs of the synth
 		send = 1;
 		10.do { |i|
-			JSTrack.at(i.asSymbol) !? { |effect|
+			JSTrack.at(i.asSymbol) !? { |t|
+				var index = t.bus.index;
+
 				case
 				{ fx[i].notNil } {
-					this.put(("out" ++ send).asSymbol, effect.bus.index);
+					//"i % send % fx % %".format(i, send, index, fx[i]).postln;
+					this.put(("out" ++ send).asSymbol, index);
 					this.put(("gain" ++ send).asSymbol, fx[i]);
 					send = send + 1;
 				}
 				{ mix[i] > 0 } {
-					this.put(("out" ++ send).asSymbol, effect.bus.index);
+					//"i % send % mix % %".format(i, send, index, mix[i]).postln;
+					this.put(("out" ++ send).asSymbol, index);
 					this.put(("gain" ++ send).asSymbol, mix[i]);
 					send = send + 1;
 				}
@@ -113,14 +107,18 @@ JSTidyStep {
 			}
 		}
 	}
+*/
 
 	play { |track|
 		var tempo = TempoClock.tempo;
 		var degrade = dict.at(\degrade) ? 1;
+
+    // this step might not be played after all..
 		if(degrade.isKindOf(Bus)) { degrade = degrade.getSynchronous };
 		if(degrade.coin.not) { ^this };
 		if(trig <= 0) { ^this };
 
+    // this track plays a control bus
 		if(track.type == \control) {
 			dict.at(\cv) ? dict.at(\control) !? { |cv|
 				Routine({
@@ -144,13 +142,14 @@ JSTidyStep {
 
 		if(JSMute.should_mute(track)) { ^this };
 
-		// sustain is overrideable in seconds (for percussive synths)
+		// calculate sustain if it has not been set yet
 		this.at(\sustain) ?? {
 			var sustainBeats = dur * (dict.at(\legato) ? 0.8);
 			dict.put(\sustain, sustainBeats / tempo)
 		};
 
 		this.put(\mute, track.mute_bus.bus.asMap);
+
 		if(track.hushing.not) {
 			track.gain_bus.set(
 				(this.at(\gain) ? 0.5).asFloat,
@@ -163,7 +162,7 @@ JSTidyStep {
 		Tidy.alter_step(track, this); // all plugins do their thing
 
 		dict.at(\def) ?? { "no def".postln; ^this };
-		this.put_sends;
+    JSMix.putSends(this, track.name);
 
 		dict = dict.collect { |v| case {v.class == Bus} {v.asMap} {v} };
 
@@ -206,17 +205,13 @@ JSTidyStep {
 
 		dict.keys.asArray.sort.do { |k|
 			var str, val = dict.at(k.asSymbol);
-			//if(k != \log) {
-				if(val.isFloat) { val = val.round(0.01) };
-				str = "%:% ".format(k, val);
-				if((len - (str.size)) < 0) { stream << "\n"; len=width; };
-				stream << str;
-				len = len - str.size;
-			//};
+			if(val.isFloat) { val = val.round(0.01) };
+			str = "%:% ".format(k, val);
+			if((len - (str.size)) < 0) { stream << "\n"; len=width; };
+			stream << str;
+			len = len - str.size;
 		};
 		
-		//dict.keysValuesDo { |k,v| stream << "%:%,".format(k,v) };
-		//outs.keysValuesDo { |k,v| stream << "~%:%,".format(k,v) };
 		stream << "\n";
 	}
 

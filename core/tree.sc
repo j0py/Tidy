@@ -28,9 +28,15 @@ JSTidy {
 		func = str.removeAt(0);
 		pat = str.join($ ).stripWhiteSpace;
 
-		if(pat[0] == $#) {
+    case
+    // "xyz #1 2 3 4" --> [xyz:1, xyz1:2, xyz2:3, xyz3:4, etc] TODO 
+		{ pat[0] == $# } {
 			^JSTidyFP_List(func, pat.drop(1).stripWhiteSpace);
-		} {
+		}
+    // "xyz /28d5" TODO not ideal
+    { pat[0] == $/ } {
+			^JSTidyFP_HexList(func, pat.drop(1).stripWhiteSpace);
+    } {
 			class = "%%".format(func[0].toUpper, func.drop(1).toLower);
 			class = "JSTidyFP_%".format(class).asSymbol.asClass;
 			class !? { ^class.new(pat) };
