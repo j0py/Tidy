@@ -1,9 +1,9 @@
 # Tidy
 Tidal Cycles syntax for SuperCollider
 
-Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I like the syntax and "tidyness" of Tidal Cycles a lot, but i want to use it in SuperCollider and be able to add/change things myself, without having to learn Haskell from scratch.
+Tidy can combine function/mini-notation-pattern pairs inside the SuperCollider Interpreter almost like you can in Tidal Cycles. I like the syntax and "tidyness" of Tidal Cycles a lot, but i want to use it in SuperCollider and be able to add/change things myself, without having to learn Haskell.
 
-First i wrote a mini-notation parser, JSMini, and this resulted in the "Pmini" quark, where you can use mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, so you need to install the Pmini quark if you wish to install the Tidy quark.
+First i wrote a mini-notation parser which resulted in the "Pmini" quark, where you can use the Tidal Cycles mini-notation in a SuperCollider pattern. The Tidy quark needs the mini-notation parser too, so you need to install the Pmini quark together with the Tidy quark.
 
 ## Usage example
 
@@ -11,16 +11,15 @@ First i wrote a mini-notation parser, JSMini, and this resulted in the "Pmini" q
 s.boot // or a more robuust setup with a limiter in it.
 
 // config
-Tidy.setup.load("~/samples").cps(0.3).quant(1).bpm(110)
+Tidy.setup.load("~/samples").quant(1).bpm(110)
 
 // setup (stereo fx) buses to write signal to
-\0 -- [0, \id]
-\1 -- [\0, \gverb, [roomsize: 6]]
+\1 -- [\gverb, roomsize: 6]
 
 // generate signal
-\k -- "buf 2" - "snd kick" - "gain 0.2"
+\k -- "map bd!4" - "buf 2" - "gain 0.2"
 
-\s -- "off 0.125" |+ "note 3" | "note 0 -3 6 8" - "buf 1 2" - "snd sn" - "gain 0.2:6" - "mix f4"
+\s -- "off 0.125" | "degree 0 -3 6 8" - "buf 1 2" - "map sn" - "gain 0.2:6" - "mix f4"
 
 \a -- "jux" - "rev" | "note [0 2 4 6 9]/10" - "def atone" - "gain 0.02" - "mix f2" - "legato 2"
 
@@ -44,47 +43,36 @@ Subfolders usually have names like "bd", "sn", etc but can have any name.
 
 ## Effects
 
-In Tidy, the symbols ```\0```, ```\1```, .. ```\9``` are reserved for stereo effects. Each effect has it's own stereo input bus where others may write audio signals to. (You can get the bus using ```\2.bus``` for example)
+In Tidy, the symbols ```\1``` to ```\9``` are reserved for stereo effects. Each effect has it's own stereo input bus where others may write audio signals to. (You can get the bus using ```\2.bus``` for example)
 
-Declaring an effect goed like this:
+Declaring an effect goes like this:
 
-```\0 -- [<output>, <synthdef>, <params>, <gain>, <target>]```
+```\1 -- [<synthdef>, <param>, ...]```
 
-The ```<output>``` can be an integer number, interpreted as an audio bus index, or the symbol of an earlier declared effect, in which case the input bus of that effect will be the output bus for this effect.
+The ```<synthdef>``` is the name of the synthdef to use (stereo in/out).
 
-The ```<synthdef>``` is the name of the synthdef to use (stereo in/out). Two default synthdefs ship with Tidy: ```\id``` and ```\gverb```.
-
-The ```<params>``` is an optional array holding parameters for the effect synth.
-
-The ```<gain>``` is an optional gain (default 1.0) with which effect will use when writing to its output bus.
-
-The ```<target>``` is an optional symbol of a declared effect. The synth for this effect will be added before the target synth in the node tree. Without a target, the synth for the effect will be added at the tail of the default group.
-
-Usually, there is one effect always present (sending audio to the hardware output):
-
-```\0 -- [0, \id]```
-
-The ```\id``` synthdef just copies its input to its output. This effect synth will write to hardware bus index 0 with a gain of 1.0.
-
-And then you can do:
-
-```\1 -- [\0, \gverb, [roomsize: 4]]```
-
-The ```\gverb``` effect will write to the input bus of the ```\id``` effect, and it has a "roomsize" parameter supplied.
-
-In total you can have 9 effects (because without the ```\0``` effect you will hear nothing). You can make a cascade of effects or let them all just write to hardware output. Or something in between.
-
-The ```<synthdef>``` symbol may also be a function:
-
-```\4 -- [\0, { |in, gain| CombL.ar(In.ar(in, 2), 0.2, 0.2, 1.0) * gain }]```
-
-This function reads the input signal, processes it with the CombL Ugen and plays the resulting signal to the \0 effect bus that was defined earlier. So if you send signal to the \4 bus, then the CombL effect is applied and then it is sent through to the \0 bus.
+Each ```<param>``` is an optional parameter for the effect synth (example: ```decay:2```).
 
 ## Sending signal to the effects
 
-Using the "mix" function, you can send the signal to the declared effects. The mix function needs a hexadecimal number, and each digit of that number corresponds to a declared effect. So in ```- "mix f004" -```, the full signal will be sent to effect ```\0```, and a quarter of the signal is sent to effect ```\3```.
+Using the "mix" function, you can send the signal to the declared effects. The mix function needs a hexadecimal number, and each digit of that number corresponds to a declared effect. Except for the first hexadecimal digit, which corresponds to direct out. 
+
+So in ```- "mix f004" -```, the full signal will be sent to direct out, and a quarter of the signal is sent to effect ```\3``` (the index counting starts at 0).
  
 The mix function is patternable like any other: ```- "mix <f004 0800>" -```.
+
+## Effects sending signal to each other
+
+This can be done using the global "mix" command:
+
+```
+\mix -- "2 f3 4 f001"
+```
+
+The format is: ```"<fx> <mix> <fx> <mix> .."```.
+
+In the example above, the output of fx ```\2``` is send 100% to direct out, and 25% to fx ```\1```.
+The output of fx ```\4``` is sent 100% to direct out and 1/16th to fx ```\3```.
 
 ### Order of execution
 
@@ -96,7 +84,7 @@ All Synth nodes "live" inside the SCSynth server in a certain order, and it is i
 
 For each chunk of 64 samples, roughly this happens:
 - all buses are cleared (all will have 64 samples with value 0.0)
-- according to their order inside SCSynth, each Synth is triggered to calculate the next 64 samples
+- according to their order inside SCSynth, each Synth is asked to calculate the next 64 samples
 - the result of each Synth is added to the content of one or more audio buses
 - finally the content of the hardware bus (audio bus with index 0) is sent to the hardware of the computer
 
@@ -108,42 +96,42 @@ When adding Synths (effects as well as triggered notes) Tidy always uses "addToH
 
 AddToHead is a good default choice: all triggered notes will always be able to be processed by the fx Synths that exist for a longer time in the server, and thus always end up at the bottom of the stack of nodes.
 
-If you want the \1 effect to write to the \0 effect, then you must define the \0 effect BEFORE the \1 effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, i added a "target" argument. If you supply a target, then addBefore will be used with that target. So if \0 sits on top of \1, then re-add \1 with target \0 to correct the situation.
+If you want the ```\2``` effect to write to the ```\1``` effect, then you must define the ```\1``` effect BEFORE the ```\2``` effect. The other way around will not work: the effects will be in the wrong order inside the server. In case you make a mistake while live coding, you can redefine both the effects, while swapping their definitions. A redefined effect will not use addToHead but instead replace the existing version of the effect synth.
 
-When re-adding an effect, it is assumed that the synthdef has a "gate" argument, and an envelope that fades in and out by some amount of seconds. This way, the old effect synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible. This is convenient if you want to re-add an effect to change some parameters for it.
+When re-adding an effect, it is assumed that the effect synthdef has a "gate" argument, and an envelope that fades in and out by some amount of seconds. This way, the old effect synth will fade out, while the new one fades in, and the overall sound will be affected as less as possible. This is convenient if you want to re-add an effect to change some parameters for it.
 
 ## Sequencing
 
-The "--" operator has been added to the Symbol class in SuperCollider, and it expects a String argument:
+The "--" operator has been added to the Symbol class in SuperCollider, and it can be given a String argument:
 ```
-\a -- "buf 0" - "snd hi" - "2 0.5"
+\a -- "buf 0 <1 2>" - "map hi" - "2 0.5"
 ```
-The String argument contains the "buf" function and the mini-notation pattern "0". So the buffer index value will be 0 during the whole cycle.
+The String argument contains the "buf" function and a mini-notation pattern. The buffer index value will be 0 during the first half of each cycle.
 
-The result of the "--" operator is a JSTidy object. The Interpreter then continues using that object. It encounters a "-" operator with, again, a String argument. Of course, the JSTidy object has a "-" method defined, and so this method is called. The result of that call will be the same JSTidy object. And so you can have as many "-" operators with string arguments as you want. They all add their little bit of information to the JSTidy object.
+The result of the "--" operator is a JSTreeBuilder object. The Interpreter then continues using that object. It encounters a "-" operator with, again, a String argument. Of course, the JSTreeBuilder object has a "-" method defined, and so this method is called. The result of that call will be the same JSTreeBuilder object. And so you can have as many "-" operators with string arguments as you want. They all add their little bit of information to the JSTreeBuilder object.
 
-If the function name in the String arguments equals the name of one of the defined effect buses, then the pattern is a mini-notation pattern for the volume with which the triggered notes will be sent to the bus. In the example above, the triggered Synths will write to the bus of the ```\2``` effect, with a gain of ```0.5```.
+If the function name in the String arguments equals the name of one of the defined effect buses, then the pattern is a mini-notation pattern for the volume with which the triggered notes will be sent to that bus. In the example above, the triggered Synths will write to the bus of the ```\2``` effect, with a gain of ```0.5```.
 
-When the SuperCollider Interpreter has finished processing all input, the "printOn" method is called on the resulting object (which is a JSTidy object). Normally, an object is expected to post something in the post window in the "printOn" method. JSTidy does that too, but it also starts a Routine that will start sequencing cycles (the "Mainloop") at the next quantisation point.
+When the SuperCollider Interpreter has finished processing all input, the "printOn" method is called on the resulting object (which is a JSTreeBuilder object). Normally, an object is expected to post something in the post window in the "printOn" method. JSTreeBuilder does that too, but it also installs a new tree to start sequencing cycles with at the next quantisation point.
 
-Re-evaluating the input line will cause the Mainloop to start sequencing new cycles at the next quantisation point.
+Re-evaluating the input line will install a new tree again, which will possibly generate different cycles.
 
-To support the "stack" function of Tidal Cycles, the "--" operator has also been added to the JSTidy class. That is because the Stack function takes an array as argument. Using the Stack function, you can sequence multiple cycles in parallel. Quickly i got the idea to create a "seq" function too, that would then sequence multiple sub-sequences in any order you want:
+To support the "stack" function of Tidal Cycles, the "--" operator has also been added to the JSTreeBuilder class. That is because the Stack function takes an array as argument. Using the Stack function, you can sequence multiple cycles in parallel. Quickly i got the idea to create a "seq" function too, that would then sequence multiple sub-sequences in any order you want:
 
 ```
 (
 \a -- "seq 0 2 1" -- [
-   \ -- "note 1 2 3" - "snd bd",
-   \ -- "note 4 5 6" - "snd sn",
-   \ -- "note 6 5 4" - "snd sn",
+   \ -- "note 1 2 3" - "map bd",
+   \ -- "note 4 5 6" - "map sn",
+   \ -- "note 6 5 4" - "map sn",
 ] - "gain 0.5"
 )
 ```
-So after processing "--" with the "seq 0 2 1" argument, the Interpreter has a JSTidy object as result. Then comes the "--" operator with an array as argument. The Interpreter will then first parse each array element, which results in an array of JSTidy objects (because each array element starts with a Symbol and a "--" operator). And this array of JSTidy objects is then the parameter for the "--" operator. The JSTidy object stores the array, and returns itself. And then the Interpreter continues by parsing "-" and "gain 0.5".
+So after processing "--" with the "seq 0 2 1" argument, the Interpreter has a JSTreeBuilder object as result. Then comes the "--" operator with an array as argument. The Interpreter will then first parse each array element, which results in an array of JSTreeBuilder objects (because each array element starts with a Symbol and a "--" operator). And this array of objects is then the parameter for the "--" operator. The JSTreeBuilder object stores the array, and returns itself. And then the Interpreter continues by parsing "-" and "gain 0.5".
 
-The "seq" function will let one of the JSTidy objects in the array generate the next cycle. In the example above, the first cycle will be generated by the JSTidy object on index 0 in the array. The next cycle will be done by the JSTidy object on index 2 and so on. After the seq pattern has been run through, it will start again from the beginning.
+The "seq" function will let one of the JSTreeBuilder objects in the array generate the next cycle. In the example above, the first cycle will be generated by the JSTreeBuilder on index 0 in the array. The next cycle will be done by the one on index 2 and so on. After the seq pattern has been run through, it will start again from the beginning.
 
-The "stack" function also takes an array of JSTidy objects, and then it will combine all the cycles from all these objects into one cycle.
+The "stack" function also takes an array of JSTreeBuilders, and then it will combine all the cycles from all these objects into one cycle.
 
 Instead of the "-" operator, you can also use "|>", "|+", "|*", "|<", "|/", "|%" operators or their related ones with different "where the structure comes from": "|>", ">|", "|>|". The "-" is the shortcut for "|>" (structure from the left, values from the right). In Tidal Cycles they use the "#" character for that, but in SuperCollider that character has special meaning and cannot be used as an operator.
 
@@ -200,7 +188,6 @@ _    Elongate a pattern                      "bd _ _ ~ sd _"
 
 The mini-notation is handled by classes in the Pmini quark (on which the Tidy quark depends). 
 
-
 ## Functions supported by JSTidy
 
 It is cumbersome to keep this section up-to-date with the software, so i created a ".doc" command, which will post the functions supported in the post window:
@@ -213,9 +200,11 @@ Normally, everything is interpreted from left to right, but the "|" operator can
 
 A good example is the "every" function:
 ```
-\a -- "every 4" |+ "n 4" | "n 0 2 4 7" - "d atone" - "gain 0.4"
+\a -- "every 4" |+ "note 4" | "note 0 2 4 7" - "def atone" - "gain 0.4"
 ```
-Each function will be documented extensively in another markdown file.
+Each function will be documented in another markdown file that i still have to start with.
+
+You can also have a peek in the code of course.. look for ```JSTidyFP_xxx``` functions. They usually have some comments on to including an example of how to use them.
 
 The rules for function names are (up until now):
 - if the name of the function equals the name of one of the effect buses, it is treated as a "send"
@@ -224,9 +213,4 @@ The rules for function names are (up until now):
 
 So if you come up with a new SynthDef which has exotic (floating point value) parameter "xyz", then you can supply values for that parameter straightaway.
 
-## Roadmap (2024-11-26)
-
-Document all functions in a separate file, or in Tidy itself maybe (```\tidy .doc("every")``` ?).
-
-Make more demo videos.
 
