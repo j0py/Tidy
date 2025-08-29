@@ -5,7 +5,7 @@ Producing audio is done by launching Synth objects in the server, and giving the
 
 Each track is a line of text that you can activate to start sequencing audio (launching synths).
 
-On this like of text you use tag/pattern pairs to specify the parameters and how they should change during the course of one _cycle_. In the pattern you use the so called "mini-notation" that is well known from TidalCycles to create timing structure and specify values.
+On this line of text you use tag/pattern pairs to specify the parameters and how they should change during the course of one _cycle_. In the pattern you use the so called "mini-notation" that is well known from TidalCycles to create timing structure and specify values.
 
 Tidy uses the mini-notation parser that is in the Pmini quark, so you need to install that quark together with Tidy.
 
