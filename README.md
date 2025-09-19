@@ -43,7 +43,7 @@ Synths that are launched on Fx tracks stay around much longer than synths played
 
 #### Control tracks
 
-A Control track has a mono control bus. At any point in time, the value on this bus is just a floating point number. A synth that is launched on a control track _writes_ a value to the control bus. Other audio of fx tracks can use these values as parameters for their synths.
+A Control track has a mono control bus. At any point in time, the value on this bus is just a floating point number. A synth that is launched on a control track _writes_ a value to the control bus. Other audio or fx tracks can use these values as parameters for their synths.
 
 ### Starting a track
 
@@ -232,6 +232,8 @@ end     : 0..1 where in the sample to stop playing
 rate    : 0..1..n at what relative rate to play the sample
 slice   : ```slice N 7 2 3 4``` cut the sample in N slices and play slice 7, 2, 3, 4 in that order
 flip    : reverse the sample and align it to the right of the step
+chop    : chop a sample in separate events from begin to end
+loopat  : stretch a cycle over N cycles, and also make sample fit perfectly
 
 Tidy uses the frequency calculation from the SuperCollider Event object:
 
