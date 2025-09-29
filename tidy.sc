@@ -3,7 +3,7 @@ Tidy {
     classvar samples, buffers, <recordings, abbreviations;
     classvar <>log=0; 
     classvar step_plugins, cycle_plugins, <>midi_out;
-    classvar <>vosc, <common;
+    classvar <>vosc, <common, <glide;
     classvar global_scale, global_root, global_swing, global_swing_n;
 
     *scale { |symbol, quantize=true|
@@ -107,6 +107,13 @@ Tidy {
             sig = LPF.ar(sig, lpf);
         };
 
+        glide = { |freq, sus|
+            freq = Lag.kr(
+                Select.kr(Line.kr(0, 1, 0.01), [ \beginfreq.kr(60.midicps), freq ]),
+                \glide.kr(0) * sus
+            );
+        };
+
         /* using Event's freq calculator :)
         scale       : requested scale, default major [0 2 4 5 7 9 11]
         degree      : indexes into the scale
@@ -193,10 +200,14 @@ Tidy {
                 begin = step.at(\begin) ? 0;
                 end = step.at(\end) ? 1;
 
-                // play whole sample
+                // play whole sample (duration is in seconds)
                 rate = rate * buf.sampleRate / s.sampleRate;
                 duration = buf.numFrames / s.sampleRate / rate;
                 duration = duration * abs(end - begin);
+
+                if((step.at(\legato) ? 0) > 0.05) {
+                    duration = step.at(\legato) * step.dur / tempo;
+                };
 
                 // loopat: adjust rate to fit the sample in n cycles
                 if((step.at(\loopat) ? 0) > 0) {
@@ -211,6 +222,11 @@ Tidy {
                     rate = rate * -1;
                     step.put(\begin, end);
                     step.put(\late, max(0, step.delta - (duration * tempo)));
+                } {
+                    if((step.at(\reversed) ? 0) > 0) {
+                        step.put(\begin, end);
+                        step.put(\end, begin);
+                    }
                 };
 
                 step.put(\sustain, duration);
@@ -483,6 +499,8 @@ Tidy {
             });
 
         }.play;
+
+        JSMainloop.activate;
     }
 
     *postline { |w=38| "".padLeft(w+6, "-").postln }
@@ -511,6 +529,7 @@ Tidy {
             var s = Server.default;
             samples = samples ?? Dictionary.new;
             folder = folder.standardizePath;
+            // find any folder anywhere that contains WAV files
             (folder +/+ "*").pathMatch.do({ |map|
                 var list = List.new;
                 (map +/+ "*.wav").pathMatch.do({ |file|
@@ -609,7 +628,7 @@ Tidy {
 
                 sus = \sustain.kr(0); // in seconds
                 freq = \freq.kr(60.midicps);
-                freq = Line.kr(\beginfreq.kr(60.midicps), freq, \glide.kr(0) * sus);
+                freq = SynthDef.wrap(Tidy.glide, [], [freq, sus]);
                 gate = \gate.kr(1);
                 vel = \vel.kr(0.5);
                 pd = \pand.kr(0.8).clip(0, 1);
@@ -627,7 +646,7 @@ Tidy {
 
             sus = \sustain.kr(0); // in seconds
             freq = \freq.kr(60.midicps);
-            freq = Line.kr(\beginfreq.kr(60.midicps), freq, \glide.kr(0) * sus);
+            freq = SynthDef.wrap(Tidy.glide, [], [freq, sus]);
             gate = \gate.kr(1);
             vel = \vel.kr(0.5);
 
@@ -644,14 +663,12 @@ Tidy {
 
         // default to stereo
         ^SynthDef(name, {
-            var sig, env, vel, freq, sus, gate, lpf;
-
+            var sig, env, vel, freq, sus, gate, lpf, ratio;
             sus = \sustain.kr(0); // in seconds
             freq = \freq.kr(60.midicps);
-            freq = Line.kr(\beginfreq.kr(60.midicps), freq, \glide.kr(0) * sus);
+            freq = SynthDef.wrap(Tidy.glide, [], [freq, sus]);
             gate = \gate.kr(1);
             vel = \vel.kr(0.5);
-
             sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]); // stereo
             sig = SynthDef.wrap(Tidy.common, [], [sig, freq, vel]);
             SynthDef.wrap(Tidy.outputs, [], [sig]);
@@ -790,7 +807,8 @@ Tidy {
                 if(track.type != \fx) { track.hush(seconds) }
             };
             (seconds * TempoClock.tempo).wait; // audio fades out
-            JSMainloop.stop;
+            JSMainloop.deactivate;
+            //JSMainloop.stop;
         }).play;
     }
 
@@ -887,9 +905,28 @@ JSTidyCycle {
 JSMainloop {
     classvar <mainloop; // the Routine that plays all cycles
     classvar <>shift=0; // wait extra beats once during mainloop
+    classvar activator;
+
+    *activate {
+        activator ?? {
+            activator = {
+                JSTrack.initClass;
+                JSMainloop.start
+            };
+            activator.value;
+            CmdPeriod.add(activator);
+        }
+    }
+
+    *deactivate {
+        JSMainloop.stop;
+        CmdPeriod.remove(activator);
+        activator = nil;
+    }
 
     *start {
-        mainloop ?? {
+        JSMainloop.stop;
+        //mainloop ?? {
             mainloop = Routine({
                 var cycle_number = 0;
                 JSControlBus.init(Server.default);
@@ -905,14 +942,14 @@ JSMainloop {
                     };
                 }
             }).play;
-            "..mainloop begun".postln;
-        };
+            "..mainloop start".postln;
+        //};
     }
 
     *stop { |seconds=0.02|
         mainloop !? { mainloop.stop };
         mainloop = nil;
-        "..mainloop ended".postln;
+        "..mainloop stop".postln;
     }
 }
 
@@ -1078,6 +1115,7 @@ JSTrack : JSTidy {
             this.release_synth(Server.default);
             this.release_mono_synth(Server.default, 6);
             queue = List.new;
+            context = nil;
             status = \idle;
         }).play;
     }
@@ -1095,7 +1133,7 @@ JSTrack : JSTidy {
         {
             // only a function or symbol set: supply default tree
             // @see Symbol -- implementation
-            this.status_(\build).add_leaf("dummy 1");
+            this.status_(\build).add_leaf("_nostructure 1");
         };
 
         if(status == \build) {
@@ -1106,13 +1144,13 @@ JSTrack : JSTidy {
             // preparations
             once = false; // true if only one cycle needs to be played
             status = \new;
-            context = nil; // a new tree should start with a new context
+            //context = nil; // a new tree should start with a new context
             newtree = tree; // from now on, the sequencer can grab the new tree
             tree = nil; // ready for next evaluation
             hushed = false;
             hushing = false;
 
-            JSMainloop.start;
+            //JSMainloop.start;
         }
     }
 
@@ -1418,9 +1456,10 @@ JSTrack : JSTidy {
         }
         {
             server.bind { polynote = Synth(def, args) };
-            if(debug_on) { "launch poly synth".postln };
+            if(debug_on) { "launch poly synth %".format(polynote).postln };
         };
 
+        if(debug_on) { "wait % seconds".format(sustain).postln };
         (sustain * tempo).wait; // in beats
 
         case
@@ -1429,7 +1468,10 @@ JSTrack : JSTidy {
             if(mono_steps.size == 1) { this.release_mono_synth(server, 3) };
             mono_steps.remove(step);
         }
-        { server.bind { polynote.set(\gate, 0) } }
+        { 
+            server.bind { polynote.set(\gate, 0) };
+            if(debug_on) { "poly synth set gate 0 %".format(polynote).postln };
+        }
     }
 
     // sends: - "> 0.2" - / - ">reverb 0.1" -
@@ -1603,37 +1645,55 @@ JSTidy {
 
     | { |str| this.add_branch("|").add_leaf(str) }
 
-    |<| {  |str| this.add(JSTidyCombBoth("<").add(this.mkleaf(str))) }
-    < {  |str| this.add(JSTidyCombBoth("<").add(this.mkleaf(str))) }
-    |< { |str| this.add(JSTidyCombLeft("<").add(this.mkleaf(str))) }
-    <| { |str| this.add(JSTidyCombRight("<").add(this.mkleaf(str))) }
+    |<| {  |str| this.combine("<", \both, str) }
+    < {  |str| this.combine("<", \both, str) }
+    |< {  |str| this.combine("<", \left, str) }
+    <| {  |str| this.combine("<", \right, str) }
 
-    |>| {  |str| this.add(JSTidyCombBoth(">").add(this.mkleaf(str))) }
+    |>| {  |str| this.combine(">", \both, str) }
     // ">" not possible in SuperCollider Interpreter
-    |> { |str| this.add(JSTidyCombLeft(">").add(this.mkleaf(str))) }
-    >| { |str| this.add(JSTidyCombRight(">").add(this.mkleaf(str))) }
+    |> { |str| this.combine("<", \left, str) }
+    >| { |str| this.combine("<", \right, str) }
 
-    - { |str| this.add(JSTidyCombLeft(">").add(this.mkleaf(str))) }
+    - { |str| 
+        "% - %".format(cur.val, str).postln;
+        this.combine(">", \left, str);
+    }
 
-    |+| {  |str| this.add(JSTidyCombBoth("+").add(this.mkleaf(str))) }
-    + {  |str| this.add(JSTidyCombBoth("+").add(this.mkleaf(str))) }
-    |+ { |str| this.add(JSTidyCombLeft("+").add(this.mkleaf(str))) }
-    +| { |str| this.add(JSTidyCombRight("+").add(this.mkleaf(str))) }
+    |+| {  |str| this.combine("+", \both, str) }
+    + {  |str| this.combine("+", \both, str) }
+    |+ { |str| this.combine("+", \left, str) }
+    +| { |str| this.combine("+", \right, str) }
 
-    |*| {  |str| this.add(JSTidyCombBoth("*").add(this.mkleaf(str))) }
-    * {  |str| this.add(JSTidyCombBoth("*").add(this.mkleaf(str))) }
-    |* { |str| this.add(JSTidyCombLeft("*").add(this.mkleaf(str))) }
-    *| { |str| this.add(JSTidyCombRight("*").add(this.mkleaf(str))) }
+    |*| {  |str| this.combine("*", \both, str) }
+    * {  |str| this.combine("*", \both, str) }
+    |* { |str| this.combine("*", \left, str) }
+    *| { |str| this.combine("*", \right, str) }
 
-    |/| {  |str| this.add(JSTidyCombBoth("/").add(this.mkleaf(str))) }
-    / {  |str| this.add(JSTidyCombBoth("/").add(this.mkleaf(str))) }
-    |/ { |str| this.add(JSTidyCombLeft("/").add(this.mkleaf(str))) }
-    /| { |str| this.add(JSTidyCombRight("/").add(this.mkleaf(str))) }
+    |/| {  |str| this.combine("/", \both, str) }
+    / {  |str| this.combine("/", \both, str) }
+    |/ { |str| this.combine("/", \left, str) }
+    /| { |str| this.combine("/", \right, str) }
 
-    |%| {  |str| this.add(JSTidyCombBoth("%").add(this.mkleaf(str))) }
-    % {  |str| this.add(JSTidyCombBoth("%").add(this.mkleaf(str))) }
-    |% { |str| this.add(JSTidyCombLeft("%").add(this.mkleaf(str))) }
-    %| { |str| this.add(JSTidyCombRight("%").add(this.mkleaf(str))) }
+    |%| {  |str| this.combine("%", \both, str) }
+    % {  |str| this.combine("%", \both, str) }
+    |% { |str| this.combine("%", \left, str) }
+    %| { |str| this.combine("%", \right, str) }
+
+    combine { |operation, direction, str|
+        cur.lastchild !? { |child| 
+            if(child.val == "_nostructure") { direction = \right }
+        };
+
+        case
+        { direction == \both }
+        { this.add(JSTidyCombBoth(operation).add(this.mkleaf(str))) }
+        { direction == \left }
+        { this.add(JSTidyCombLeft(operation).add(this.mkleaf(str))) }
+        { direction == \right }
+        { this.add(JSTidyCombRight(operation).add(this.mkleaf(str))) }
+        { };
+    }
 }
 
 // chop samples in N parts (set \begin and \end)
@@ -1754,6 +1814,129 @@ JSTidyFP : JSTidyNode {
     }
 }
 
+// Duplicate (like stut) N M 
+// N = number of duplicates (1..)
+// M = number of duplicates in 1 cycle (1/length of 1 duplicate in cycles)
+// (i'd rather type "16" than "0.0625" and i cannot yet support "(1/16)".
+// \a -- "dup 4 16" |* "speed 0.5" | "s bd sn"
+// maybe i can make things patternable too, or fluid
+JSTidyFP_Dup : JSTidyNode {
+    var <>n=1, <>m=1, >context;
+
+    *new { |pattern, context| 
+        var instance = super.new("dup").context_(context);
+        pattern = pattern ? "1 1";
+        pattern = pattern.split($ );
+        if(pattern.size > 0) {
+            instance.n = pattern[0].asInteger;
+            pattern = pattern.drop(1);
+        };
+        if(pattern.size > 0) {
+            instance.m = pattern[0].asFloat;
+            pattern = pattern.drop(1);
+        };
+        ^instance;
+    }
+
+    become_cur_after_add { ^true }
+
+    get_1 { |cycle|
+        var time, subtime, pq, steps, pq2;
+        //
+        cycle = children.last.get(cycle); // branch cycle
+        children.drop(-1).do { |child| cycle = child.get(cycle) };
+        //
+        pq = context.at(\dup) ? PriorityQueue.new;
+        //
+        time = 0;
+        cycle.steps.do { |step|
+            // could fetch m from pattern here
+            subtime = time;
+            n.do { |i|
+                pq.put(subtime, step.deepCopy);
+                subtime = subtime + (1/m);
+            };
+            time = time + step.delta;
+        };
+
+        // take steps for the current cycle out of the PriorityQueue
+        steps = List.new;
+        time = pq.topPriority ? 1;
+        while { pq.notEmpty and: (time <= 0.999) } {
+            var top, step = pq.pop;
+            if(steps.size <= 0) { steps.add(JSTidyStep.rest(time)) };
+            top = pq.topPriority ? 1;
+            steps.add(step.delta_(top - time));
+            time = top;
+        };
+
+        if(steps.size <= 0) { steps.add(JSTidyStep.rest(1)) };
+
+        // shift entire priorityqueue 1 cycle
+        pq2 = PriorityQueue.new;
+        while { pq.notEmpty } {
+            var top = pq.topPriority;
+            pq2.put(max(0, top - 1), pq.pop);
+        };
+
+        // store for next call to get()
+        context.put(\dup, pq2);
+
+        ^JSTidyCycle(steps.asArray);
+    }
+
+    get { |cycle|
+        var time, pq, steps, pq2, cycles, shift;
+
+        pq = context.at(\dup) ? PriorityQueue.new;
+
+        // make n cycles, but not shifted in time yet
+        cycles = List.new;
+        cycles.add(cycle = children.last.get(cycle)); // branch cycle
+        (n-1).do {
+            cycle = cycle.deepCopy;
+            children.drop(-1).do { |child| cycle = child.get(cycle) };
+            cycles.add(cycle);
+        };
+
+        // put all cycles in the PriorityQueue, shifted in time
+        shift = 0;
+        cycles.do { |cycle|
+            time = 0;
+            cycle.steps.do { |step|
+                pq.put(time + shift, step);
+                time = time + step.delta;
+            };
+            shift = shift + (1/m);
+        };
+
+        // take steps for the current cycle out of the PriorityQueue
+        steps = List.new;
+        time = pq.topPriority ? 1;
+        while { pq.notEmpty and: (time <= 0.999) } {
+            var top, step = pq.pop;
+            if(steps.size <= 0) { steps.add(JSTidyStep.rest(time)) };
+            top = pq.topPriority ? 1;
+            steps.add(step.delta_(top - time));
+            time = top;
+        };
+
+        if(steps.size <= 0) { steps.add(JSTidyStep.rest(1)) };
+
+        // shift entire priorityqueue 1 cycle
+        pq2 = PriorityQueue.new;
+        while { pq.notEmpty } {
+            var top = pq.topPriority;
+            pq2.put(max(0, top - 1), pq.pop);
+        };
+
+        // store for next call to get()
+        context.put(\dup, pq2);
+
+        ^JSTidyCycle(steps.asArray);
+    }
+}
+
 // \a -- "every 8" >| "b 1 2 3 4" | etc; takes action on 7, 15, 23, etc
 JSTidyFP_Every : JSTidyNode {
     var <>when, turn;
@@ -1851,7 +2034,7 @@ JSTidyFP_List : JSTidyFP {
 
     *new { |val, str|
         var instance = super.new(val).str_(str);
-        instance.add(JSTidyPattern("1")); // a single step dummy pattern
+        instance.add(JSTidyPattern("1")); // one step per cycle
         ^instance;
     }
 
@@ -2038,7 +2221,8 @@ JSTidyFP_Seq : JSTidyNode {
         // if you changed the pattern and then re-evaluate, then
         // the remembered sequence has become invalid, and must
         // be cleared. so i have to remember the pattern string
-        // too..
+        // too to detect if it has changed.
+        // Still, this leaves only 1 "seq" per tree..
         seq = context.at(\seq);
         context.at(\seqp) !? { |p| if(p != pattern) { seq = nil } };
         context.put(\seqp, pattern);
@@ -2512,6 +2696,8 @@ JSTidyNode {
         child.parent = this; // @see JSTidy -- operator
     }
 
+    lastchild { ^children.last }
+
     log { |indent=""|
         "%% %".format(indent, this.class, (val ? "").quote).postln;
         children.do { |child| child.log(indent ++ "--") };
@@ -2875,7 +3061,7 @@ JSWave {
                 .status_(\build)
                 .launch(in)
                 .add_branch("--")
-                .add_leaf("dummy 1")
+                .add_leaf("_nostructure 1")
             }
 
             { ^"%% -- <string or func or symbol>".format("\\", this) };
