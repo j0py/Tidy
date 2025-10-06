@@ -102,14 +102,17 @@ Tidy {
             sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) - 1); // inverted
 
             // this is rather expensive, don't you think?
-            lpf = \lpf.kr(20000).clip(20, 20000);
+            lpf = \lpf.kr(20000);
             lpf = \kt.kr(0).linlin(0, 1, lpf, max(freq * (0.5+vel), lpf));
-            sig = LPF.ar(sig, lpf);
+            sig = LPF.ar(sig, lpf.clip(20, 20000));
         };
 
         glide = { |freq, sus|
             freq = Lag.kr(
-                Select.kr(Line.kr(0, 1, 0.01), [ \beginfreq.kr(60.midicps), freq ]),
+                Select.kr(
+                    Line.kr(0, 1, 0.005), 
+                    [ \beginfreq.kr(60.midicps), freq ]
+                ),
                 \glide.kr(0) * sus
             );
         };
@@ -696,6 +699,7 @@ Tidy {
             }).play;
         } ?? { bpm = TempoClock.tempo * 60 * 4 };
         "bpm: % (% cps)".format(bpm, (bpm / 60 / 4).round(0.01)).postln;
+        ^TempoClock.tempo;
     }
 
     *cps { |cps|
@@ -707,6 +711,7 @@ Tidy {
             }).play;
         } ?? { cps = TempoClock.tempo };
         "cps: % (% bpm)".format(cps, (cps * 60 * 4).round(0.01)).postln;
+        ^TempoClock.tempo;
     }
 
     *quant { |quant|
@@ -734,6 +739,7 @@ Tidy {
                 );
                 (0.5 * TempoClock.tempo).wait;
                 b.clear;
+                s.sync;
                 buffers.add(b);
                 buffers.join("\n").postln;
             }).play;
@@ -1656,7 +1662,7 @@ JSTidy {
     >| { |str| this.combine("<", \right, str) }
 
     - { |str| 
-        "% - %".format(cur.val, str).postln;
+        //"% - %".format(cur.val, str).postln;
         this.combine(">", \left, str);
     }
 
@@ -1736,12 +1742,19 @@ JSTidyFP_Chop : JSTidyNode {
 JSTidyFP : JSTidyNode {
     *new { |val, pattern|
         val = Tidy.abbr.at(val.asSymbol) ? val;
+        // check if pattern must be interpreted from a string
+        // store the pattern in this object
         pattern ?? { pattern = "1" };
         if(pattern.size <= 0) { pattern = "1" };
         ^super.new(val).add(JSTidyPattern(pattern))
     }
 
     get { |cycle|
+        // interpret the stored string to a pattern string
+        // if this pattern differs from the stored pattern, then
+        // replace your child with a new JSTidyPattern(pattern)
+        // store the new pattern
+
         // return a cycle with value from your pattern filled in for val
         cycle = children.first.get(cycle);
 
@@ -2925,7 +2938,7 @@ JSADSR {
             (name++1).asSymbol.kr(0),           // attack
             (name++2).asSymbol.kr(0),           // decay
             (name++3).asSymbol.kr(1),           // sustainlevel
-            (name++4).asSymbol.kr(0).max(0.1),  // release
+            (name++4).asSymbol.kr(0),           // release
             name.asSymbol.kr(default),          // peak
             (name++5).asSymbol.kr(-4)           // curve
         ).kr(doneAction, gate);
