@@ -6,6 +6,12 @@ Tidy {
     classvar <>vosc, <common, <glide;
     classvar global_scale, global_root, global_swing, global_swing_n;
 
+    // all playing patterns will freeze temporarily
+    *freeze { |beats| JSMainloop.shift = abs(beats) }
+
+    // playing patterns continue during the mute
+    *muteall { |beats| JSMute.muteall(abs(beats)) }
+
     *scale { |symbol, quantize=true|
         symbol ?? { ^global_scale }; // getter / setter
         Routine({
@@ -2801,10 +2807,25 @@ JSTidyException : Exception {
 JSMute {
     classvar muted;
     classvar soloed;
+    classvar mute_all=false;
+
+    // TODO: create a temporary mute for all tracks (like 1 cycle)
+    // do this by setting soloed to something for a short while
+    *muteall { |beats|
+        Routine({
+            JSQuant.quantize(0.01);
+            mute_all = true;
+            this.pr_set_mute_buses;
+            beats.wait;
+            mute_all = false;
+            this.pr_set_mute_buses;
+        }).play;
+    }
 
     *symbols { |str_or_symbol|
         var result = List.new;
         case
+        { str_or_symbol.isNil } { }
         { str_or_symbol.class == String } {
             str_or_symbol.split($ ).do { |key|
                 case
@@ -2825,35 +2846,59 @@ JSMute {
         }
     }
 
+    *toggle_in_set { |in, set|
+        this.symbols(in).do { |sym|
+            JSTrack.at(sym) !? { |t| 
+                if(set.findMatch(t).notNil) {
+                    set.remove(t);
+                } {
+                    set.add(t);
+                }
+            }
+        }
+    }
+
     *remove_from_set { |in, set|
         this.symbols(in).do { |sym|
             JSTrack.at(sym) !? { |t| set.remove(t) }
         }
     }
 
-    // Tidy mute: "a b c" or Tidy mute: \a
+    // Tidy .mute: "a b c" or Tidy .mute: \a or \a .mute
     *mute { |str_or_symbol|
         Routine({
-            JSQuant.quantize;
+            JSQuant.quantize(0.01);
             muted ?? { muted = IdentitySet.new };
-            if(str_or_symbol.isString) { muted = IdentitySet.new };
-            this.add_to_set(str_or_symbol, muted);
+            if(str_or_symbol.isString) { 
+                muted = IdentitySet.new;
+                this.add_to_set(str_or_symbol, muted);
+            } {
+                // \a .mute is now a toggle switch
+                this.toggle_in_set(str_or_symbol, muted);
+            };
             this.pr_set_mute_buses;
         }).play;
     }
 
     *solo { |str_or_symbol|
         Routine({
-            JSQuant.quantize;
+            var current;
+            JSQuant.quantize(0.01);
+            current = soloed;
             soloed = IdentitySet.new;
             this.add_to_set(str_or_symbol, soloed);
+            current.do { |t|
+                if(soloed.findMatch(t).notNil) {
+                    soloed.remove(t)
+                }
+            };
             this.pr_set_mute_buses;
         }).play;
     }
 
     *unmute { |str_or_symbol|
         Routine({
-            JSQuant.quantize;
+            JSQuant.quantize(0.01);
             muted ?? { muted = IdentitySet.new };
             this.remove_from_set(str_or_symbol, muted);
             this.pr_set_mute_buses;
@@ -2862,7 +2907,7 @@ JSMute {
 
     *unsolo { |str_or_symbol|
         Routine({
-            JSQuant.quantize;
+            JSQuant.quantize(0.01);
             soloed ?? { soloed = IdentitySet.new };
             this.remove_from_set(str_or_symbol, soloed);
             this.pr_set_mute_buses;
@@ -2899,8 +2944,8 @@ JSMute {
         soloed ?? { soloed = IdentitySet.new };
         muted ?? { muted = IdentitySet.new };
 
-        // solo wins from mute
-        if(soloed.includes(track)) { ^false };
+        if(mute_all) { ^true };
+        if(soloed.includes(track)) { ^false }; // solo wins from mute
         if(muted.includes(track)) { ^true };
         if(soloed.size > 0) { ^true };
         ^false;

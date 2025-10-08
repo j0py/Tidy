@@ -319,10 +319,10 @@ The cycles is played in the right ear, and at the same time reversed in the left
 ### Track functions
 
 ```
-\a .mute    : mute it
+\a .mute    : mute it (toggles too)
 \a .unmute  : unmute it
 \a .hush    : stop sequencing and set gain to 0
-\a .solo    : solo it (muting all others)
+\a .solo    : solo it (muting all others) (toggles too)
 ```
 
 ### Global functions
