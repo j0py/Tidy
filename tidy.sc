@@ -2,7 +2,7 @@
 Tidy {
     classvar samples, buffers, <recordings, abbreviations;
     classvar <>log=0; 
-    classvar step_plugins, cycle_plugins, <>midi_out;
+    classvar step_plugins, cycle_plugins, pattern_plugins, <>midi_out;
     classvar <>vosc, <common, <glide;
     classvar global_scale, global_root, global_swing, global_swing_n;
 
@@ -55,9 +55,9 @@ Tidy {
         step_plugins.add(key, func);
     }
 
-    *alter_step { |track, step|
+    *alter_step { |step, track|
         step_plugins = step_plugins ? JSPlugins.new;
-        step_plugins.alter(track, step)
+        step_plugins.alter(step, track)
     }
 
     *add_cycle_plugin { |key, func|
@@ -65,9 +65,19 @@ Tidy {
         cycle_plugins.add(key, func);
     }
 
-    *alter_cycle { |track, cycle|
+    *alter_cycle { |cycle, track|
         cycle_plugins = cycle_plugins ? JSPlugins.new;
-        cycle_plugins.alter(track, cycle)
+        cycle_plugins.alter(cycle, track)
+    }
+
+    *add_pattern_plugin { |key, func|
+        pattern_plugins = pattern_plugins ? JSPlugins.new;
+        pattern_plugins.add(key, func);
+    }
+
+    *alter_pattern { |list_holding_pattern|
+        pattern_plugins = pattern_plugins ? JSPlugins.new;
+        pattern_plugins.alter(list_holding_pattern)
     }
 
     *outputs { |bus|
@@ -123,6 +133,26 @@ Tidy {
             );
         };
 
+        // \a -- "amp sine 8 2 0.3 0.5" - ...
+        this.add_pattern_plugin(\sine, { |list_holding_pattern|
+            var pattern = list_holding_pattern.at(0);
+            if(pattern.find("sine") == 0) {
+                var n, sines_per_cycle, mul, add;
+                pattern = pattern.split($ );
+                n = (pattern.at(1) ? 8).asInteger;
+                sines_per_cycle = (pattern.at(2) ? 1).asFloat.round(0.01);
+                mul = (pattern.at(3) ? 1).asFloat;
+                add = (pattern.at(4) ? 0).asFloat;
+
+                pattern = n.collect { |i|
+                    (sin(i*2*pi/n) * mul + add).round(mul/500)
+                };
+                pattern = "[" ++ pattern.join($ ) ++ "]*" ++ sines_per_cycle;
+                pattern.postln;
+                list_holding_pattern.put(0, pattern);
+            };
+        });
+
         /* using Event's freq calculator :)
         scale       : requested scale, default major [0 2 4 5 7 9 11]
         degree      : indexes into the scale
@@ -140,7 +170,7 @@ Tidy {
         so either use \degree and \scale, or use \note
         so either use \note, \root and \octave, or use \midinote
         */
-        this.add_step_plugin(\freq, { |track, step|
+        this.add_step_plugin(\freq, { |step, track|
             step.at(\freq) ?? {
                 var scale, root;
 
@@ -166,7 +196,7 @@ Tidy {
         // - "sound bd" - "buf 3" - "note d4" - "degree 2"
         // - "s bd" - "b 3" - "n d4" - "d 2"
         // find sample -> set \map, find synthdef -> set \def
-        this.add_step_plugin(\sound, { |track, step|
+        this.add_step_plugin(\sound, { |step, track|
             step.at(\sound) !? { |sound|
                 sound = sound.asSymbol;
                 case
@@ -179,7 +209,7 @@ Tidy {
             }
         });
 
-        this.add_step_plugin(\sample, { |track, step|
+        this.add_step_plugin(\sample, { |step, track|
             var buf, rate;
 
             rate = (step.at(\rate) ? 1) * (step.at(\speed) ? 1);
@@ -246,7 +276,7 @@ Tidy {
 
         // the Vowel quark could be installed, or not
         \Vowel.asClass !? {
-            this.add_step_plugin(\vowel, { |track, step|
+            this.add_step_plugin(\vowel, { |step, track|
                 step.at(\vowel) !? { |vowel|
                     vowel = vowel.asSymbol; // \a \o \e \i \u
                     Vowel.formLib.at(vowel) !? {
@@ -264,25 +294,46 @@ Tidy {
             })
         };
 
-        this.add_step_plugin(\bufnum, { |track, step|
-            if(step.has(\bufnum)) {
-                if(step.has(\def).not) {
-                    step.put(\def, \playbuf1);
-                    if((step[\bufchannels] ?? 1) > 1) {
-                        step.put(\def, \playbuf2)
-                    };
+        this.add_step_plugin(\bufnum, { |step, track|
+            case
+            { step.has(\_function_or_symbol) } { } // do not set \def key!
+            { step.has(\bufnum).not } { } // not playing a buffer
+            { step.has(\rumble) } {
+                step.put(\def, \rumble1);
+                if((step[\bufchannels] ?? 1) > 1) {
+                    step.put(\def, \rumble2)
                 };
+            }
+            { step.has(\def).not } {
+                step.put(\def, \playbuf1);
+                if((step[\bufchannels] ?? 1) > 1) {
+                    step.put(\def, \playbuf2)
+                };
+            }
+            { };
 
-                if(step.has(\rumble)) {
-                    step.put(\def, \rumble1);
-                    if((step[\bufchannels] ?? 1) > 1) {
-                        step.put(\def, \rumble2)
+            /*
+            if(step.has(\_function_or_symbol).not) {
+                if(step.has(\bufnum)) {
+                    if(step.has(\def).not) {
+                        step.put(\def, \playbuf1);
+                        if((step[\bufchannels] ?? 1) > 1) {
+                            step.put(\def, \playbuf2)
+                        };
                     };
+
+                    if(step.has(\rumble)) {
+                        step.put(\def, \rumble1);
+                        if((step[\bufchannels] ?? 1) > 1) {
+                            step.put(\def, \rumble2)
+                        };
+                    }
                 }
             }
+            */
         });
 
-        this.add_step_plugin(\swing, { |track, step|
+        this.add_step_plugin(\swing, { |step, track|
             (step.at(\swing) ? Tidy.swing) !? { |swing|
                 var count, onset;
                 swing = swing.asFloat.clip(0, 1);
@@ -303,7 +354,7 @@ Tidy {
         a value of 2 means "if next step is a rest, add its dur to yours"
         this wraps around the cycle.
         */
-        this.add_cycle_plugin(\fill, { |track, cycle|
+        this.add_cycle_plugin(\fill, { |cycle, track|
             var last, lastfill, steps = List.new;
             cycle.steps.do { |step|
                 var fill = (step.at(\fill) ? 1);
@@ -357,15 +408,16 @@ Tidy {
 
         Tidy.def2(\playbuf2, {
             arg freq, vel, gate, sustain;
-            var sig, rate, bufnum, begin, att, rel, crv;
+            var sig, rate, bufnum, begin, att, rel, crv, loop;
             //
             att = \att.kr(0);
             rel = \rel.kr(0.01);
             crv = \crv.kr(-4);
+            loop = \loop.kr(0);
             rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
             bufnum = \bufnum.kr(0);
             begin = \begin.kr(0) * BufFrames.kr(bufnum);
-            sig = PlayBuf.ar(2, bufnum, rate, \trig.tr(1), begin);
+            sig = PlayBuf.ar(2, bufnum, rate, \trig.tr(1), begin, loop);
             sig = LeakDC.ar(sig);
             sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), 3.dbamp);
             sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
@@ -373,15 +425,16 @@ Tidy {
 
         Tidy.def(\playbuf1, {
             arg freq, vel, gate, sustain;
-            var sig, rate, bufnum, begin, att, rel, crv, env;
+            var sig, rate, bufnum, begin, att, rel, crv, env, loop;
             //
             att = \att.kr(0);
             rel = \rel.kr(0.01);
             crv = \crv.kr(-4);
+            loop = \loop.kr(0);
             rate = \rate.kr(1) * \cvrate.kr(1) * freq / 60.midicps;
             bufnum = \bufnum.kr(0);
             begin = \begin.kr(0) * BufFrames.kr(bufnum);
-            sig = PlayBuf.ar(1, bufnum, rate, \trig.tr(1), begin);
+            sig = PlayBuf.ar(1, bufnum, rate, \trig.tr(1), begin, loop);
             sig = LeakDC.ar(sig);
             sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
         });
@@ -1082,6 +1135,7 @@ JSTrack : JSTidy {
         var track;
         name = name.asSymbol;
         tracks.at(name) !? { |track| ^track };
+        "new track %%, type %%".format("\\", name, "\\", type).postln;
         tracks.put(name, track = JSTrack.new.init(name, type));
         ^track;
     }
@@ -1113,7 +1167,14 @@ JSTrack : JSTidy {
         if(debug_on) { "set function / synthdef to launch".postln };
     }
 
-    debug { |on=true| debug_on = on }
+    //debug { |on=true| debug_on = on }
+
+    debug { |on|
+        case
+        { debug_on.isNil } { debug_on = (on ? true) } // default true
+        { on.isNil } { debug_on = debug_on.not }      // toggle true/false
+        { debug_on = on }                             // or set
+    }
 
     // after hush, you must evaluate the track in the interpreter to re-start
     hush { |seconds=0.02|
@@ -1145,7 +1206,7 @@ JSTrack : JSTidy {
         {
             // only a function or symbol set: supply default tree
             // @see Symbol -- implementation
-            this.status_(\build).add_leaf("_nostructure 1");
+            this.status_(\build).add_leaf("_function_or_symbol 1");
         };
 
         if(status == \build) {
@@ -1187,7 +1248,7 @@ JSTrack : JSTidy {
                         // you can do this in a cycle plugin
                         cycle.steps.do({ |x| rot ?? rot = x.at(\rot) });
                         cycle.rotate(rot ? 0);
-                        Tidy.alter_cycle(this, cycle);
+                        Tidy.alter_cycle(cycle, this);
                         if(Tidy.log == \cycle) { cycle.postln };
                         queue.addAll(cycle.steps);
                     };
@@ -1268,7 +1329,7 @@ JSTrack : JSTidy {
 
         step.mapbuses;
 
-        Tidy.alter_step(this, step); // all plugins do their thing
+        Tidy.alter_step(step, this); // all plugins do their thing
 
         // calculate sustain if it has not been set yet
         step.at(\sustain) ?? {
@@ -1368,12 +1429,12 @@ JSTrack : JSTidy {
                         );
                     }
                 } {
-                    if(debug_on) { "launch synthdef".postln };
+                    if(debug_on) { "launch synthdef (old = %)".format(old ? "(nil)").postln };
                     server.bind {
                         synth = Synth(
                             to_launch_copy, 
                             args,
-                            old, 
+                            if(addAction == \addBefore, old, nil),
                             addAction
                         );
                     };
@@ -1399,7 +1460,7 @@ JSTrack : JSTidy {
             {
                 args = args ++ [
                     \freqlag, (step.at(\glide) ? 0) * sustain,
-                    \trig, 1,
+                    //\trig, 1, // PlayBuf2 will restart if retriggered!
                 ];
 
                 if(debug_on) { "set params: %".format(args).postln };
@@ -1418,15 +1479,15 @@ JSTrack : JSTidy {
         // this is why the release of the target is postponed a bit.
         Routine {
             0.1.wait;
-            if(debug_on) { "release target".postln };
+            if(debug_on) { "release target %".format(target ? "(nil)").postln };
             target !? { server.bind { target.set(\gate, 0) } };
         } .play
     }
 
     release_synth { |server|
         synth !? { 
+            if(debug_on) { "release synth %".format(synth).postln };
             server.bind { synth.set(\gate, 0); synth = nil };
-            if(debug_on) { "release synth".postln };
         };
     }
 
@@ -1627,6 +1688,10 @@ JSTidy {
         val = str.removeAt(0);
         pat = str.join($ ).stripWhiteSpace;
 
+        pat = [pat].asList;
+        Tidy.alter_pattern(pat);
+        pat = pat.at(0);
+
         case
         { pat[0] == $# }
         { ^JSTidyFP_List(val, pat.drop(1).stripWhiteSpace) }
@@ -1694,7 +1759,7 @@ JSTidy {
 
     combine { |operation, direction, str|
         cur.lastchild !? { |child| 
-            if(child.val == "_nostructure") { direction = \right }
+            if(child.val == "_function_or_symbol") { direction = \right }
         };
 
         case
@@ -2964,8 +3029,8 @@ JSPlugins {
     }
 
     // .. is the sequence with which they are called
-    alter { |track, step|
-        list.do { |key|	dict.at(key.asSymbol).value(track, step) }
+    alter { |obj, track|
+        list.do { |key|	dict.at(key.asSymbol).value(obj, track) }
     }
 
     log { list.postln }
@@ -3107,7 +3172,7 @@ JSWave {
             { type = \audio };
 
             track = JSTrack.atFail(this, type).status_(\idle);
-            track.debug(false); // after re-evaluation, debug is off
+            //track.debug(false); // after re-evaluation, debug is off
 
             case
             { in.isString }
@@ -3119,7 +3184,7 @@ JSWave {
                 .status_(\build)
                 .launch(in)
                 .add_branch("--")
-                .add_leaf("_nostructure 1")
+                .add_leaf("_function_or_symbol 1")
             }
 
             { ^"%% -- <string or func or symbol>".format("\\", this) };
