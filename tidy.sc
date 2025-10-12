@@ -5,6 +5,7 @@ Tidy {
     classvar step_plugins, cycle_plugins, pattern_plugins, <>midi_out;
     classvar <>vosc, <common, <glide;
     classvar global_scale, global_root, global_swing, global_swing_n;
+    classvar <>parts;
 
     // all playing patterns will freeze temporarily
     *freeze { |beats| JSMainloop.shift = abs(beats) }
@@ -75,9 +76,39 @@ Tidy {
         pattern_plugins.add(key, func);
     }
 
-    *alter_pattern { |list_holding_pattern|
+    /*
+    algorithm:
+
+    - find the string " (" in the pattern
+    - find the matching ")"
+    - let the pattern plugin(s) produce a replacement
+      for the "(....)" that you found
+    - until you cannot find " (" no more
+    */
+    /*
+    *alter_pattern_2 { |pattern|
+        var holder, part, prev;
+        pattern = " " ++ pattern;
+        pattern.findAll(" (").do { |i|
+            var opener, closer;
+            opener = pattern.find("(", true, i) ? inf;
+            closer = pattern.find(")", true, i);
+            closer ?? { "missing ) bracket".die(pattern) };
+            while { opener < closer } {
+                opener = pattern.find("(", true, closer + 1) ? inf;
+                closer = pattern.find(")", true, closer + 1);
+                closer ?? { "missing ) bracket".die(pattern) };
+            }
+            // HIER
+        };
+    }
+*/
+
+    *alter_pattern { |pattern|
+        var holder = StringHolder(pattern);
         pattern_plugins = pattern_plugins ? JSPlugins.new;
-        pattern_plugins.alter(list_holding_pattern)
+        pattern_plugins.alter(holder);
+        ^holder.asString;
     }
 
     *outputs { |bus|
@@ -134,24 +165,89 @@ Tidy {
         };
 
         // \a -- "amp sine 8 2 0.3 0.5" - ...
-        this.add_pattern_plugin(\sine, { |list_holding_pattern|
-            var pattern = list_holding_pattern.at(0);
-            if(pattern.find("sine") == 0) {
-                var n, sines_per_cycle, mul, add;
-                pattern = pattern.split($ );
-                n = (pattern.at(1) ? 8).asInteger;
-                sines_per_cycle = (pattern.at(2) ? 1).asFloat.round(0.01);
-                mul = (pattern.at(3) ? 1).asFloat;
-                add = (pattern.at(4) ? 0).asFloat;
+        // trouble if the tag is also the name for a map or synthdef!
+        // we need this: \a -- "amp (sine 8 2 0.3 0.5)" -
+        // no synthdef will be called "(sine" ..
+        this.add_pattern_plugin(\pattern_tags, { |stringHolder|
+            var tag, samples, rate, mul, add;
+            var pattern = stringHolder.asString.split($ );
 
-                pattern = n.collect { |i|
-                    (sin(i*2*pi/n) * mul + add).round(mul/500)
+            tag = (pattern.at(0) ? "").asString;
+            samples = (pattern.at(1) ? 8).asInteger;
+            rate = (pattern.at(2) ? 1).asFloat.round(0.01);
+            mul = (pattern.at(3) ? 1).asFloat;
+            add = (pattern.at(4) ? 0).asFloat;
+
+            case
+            { tag == "sine" }
+            {
+                pattern = samples.collect { |i|
+                    (sin(i*2*pi/samples) * mul + add).round(mul/500)
                 };
-                pattern = "[" ++ pattern.join($ ) ++ "]*" ++ sines_per_cycle;
-                pattern.postln;
-                list_holding_pattern.put(0, pattern);
-            };
+                pattern = "[" ++ pattern.join($ ) ++ "]*" ++ rate;
+                stringHolder.set(pattern);
+            }
+            { tag == "rand" }
+            {
+                pattern = samples.collect { |i|
+                    rrand(add - mul, add + mul).round(mul/500)
+                };
+                pattern = "[" ++ pattern.join($ ) ++ "]*" ++ rate;
+                stringHolder.set(pattern);
+            }
+            { tag == "irand" }
+            {
+                pattern = samples.collect { |i|
+                    rrand(add - mul, add + mul).round(1).asInteger
+                };
+                pattern = "[" ++ pattern.join($ ) ++ "]*" ++ rate;
+                stringHolder.set(pattern);
+            }
+            { };
         });
+
+        // Tidy.parts is array of pattern parts (short strings)
+        // \a -- "buf <(part 5acf)!3 (part 2006)>" - "s jungle_kit" -
+        // in the kit, 1 = bd, 2 = hh, 3 = sn, 4 = ghost etc
+        // a part could be "[1,2 ~ 2 3]" (4 16th notes)
+        // up to 36 parts can be used: 0-9, a-z
+        // \a -- "buf [[1,2 ~ 2 3] [1,2 ~ 2 3] [1,2 ~ 2 3] [1,2 ~ 2 3]]!3"
+
+        /*
+        \a -- "seq 0 1" -- [
+            \-- "buf part 4cw2",
+            \-- "buf part 51~d", // "~" means play a rest
+            \-- "buf part 32?5", // "?" means pick one at random
+        ] - "s jungle"
+
+        \a -- "buf [part 3d!4 part 42@3]" -  // should work too
+        a part should always become "[<part> <part>]" so that the
+        pattern becomes "buf [<part> <part>]!4 [<part> <part>]@3"
+
+        look for "part " and then add all chars 0-9|a-z and then
+        lookup the parts in Tidy.parts and then replace it in
+        the pattern. until you cannot find "part " no more.
+
+        will collide if using a synthdef or map called "part "
+        */
+
+        /*
+        this.add_pattern_plugin(\pattern_parts, { |stringHolder|
+            var tag, samples, rate, mul, add;
+            var pattern = stringHolder.asString.split($ );
+
+            tag = (pattern.at(0) ? "").asString;
+            samples = (pattern.at(1) ? 8).asInteger;
+            rate = (pattern.at(2) ? 1).asFloat.round(0.01);
+            mul = (pattern.at(3) ? 1).asFloat;
+            add = (pattern.at(4) ? 0).asFloat;
+
+        });
+*/
+
+        // pattern plugins (these run once when code is evaluated):
+        // run <samples> <rate> <from> <to>   : generate values
+        // pulse <samples> <rate> <mul> <add> : make pulsewave
 
         /* using Event's freq calculator :)
         scale       : requested scale, default major [0 2 4 5 7 9 11]
@@ -898,6 +994,16 @@ Tidy {
             "*** midiout ready : connect using jack now ***".postln;
         }).play;
     }
+}
+
+StringHolder {
+    var string;
+
+    *new { |string| ^super.newCopyArgs(string) }
+
+    asString { ^string }
+
+    set { |str| string = str }
 }
 
 LR2MS {
@@ -1688,9 +1794,9 @@ JSTidy {
         val = str.removeAt(0);
         pat = str.join($ ).stripWhiteSpace;
 
-        pat = [pat].asList;
+        pat = StringHolder(pat);
         Tidy.alter_pattern(pat);
-        pat = pat.at(0);
+        pat = pat.get;
 
         case
         { pat[0] == $# }
