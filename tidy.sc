@@ -1268,6 +1268,9 @@ JSTrack : JSTidy {
         }
     }
 
+    // detect a change to the function by keeping a copy of the
+    // .asCompileString source code of the function that you have
+    // currently running.
     launch { |function_or_symbol| 
         to_launch = function_or_symbol;
         if(debug_on) { "set function / synthdef to launch".postln };
@@ -1794,9 +1797,7 @@ JSTidy {
         val = str.removeAt(0);
         pat = str.join($ ).stripWhiteSpace;
 
-        pat = StringHolder(pat);
-        Tidy.alter_pattern(pat);
-        pat = pat.get;
+        pat = Tidy.alter_pattern(pat);
 
         case
         { pat[0] == $# }
