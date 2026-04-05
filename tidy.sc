@@ -1,6 +1,6 @@
 /*
 
-akkoorden: - "chord `[0,2,4]" - 
+over akkoorden: - "chord `[0,2,4]" - 
 en dan in de loop die de synth gaat starten nog 2 routines
 erbij starten met evt strum. de nummers zijn degrees?
 
