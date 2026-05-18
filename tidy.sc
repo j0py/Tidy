@@ -1,203 +1,45 @@
-/*
-
-over akkoorden: - "chord `[0,2,4]" - 
-en dan in de loop die de synth gaat starten nog 2 routines
-erbij starten met evt strum. de nummers zijn degrees?
-
-3 operator pm osc maken
-- "ratio #0 0 5 8"
-- "level #1 1 0 0"
-- "mod ????" wie wie moduleert
-- one or more adsr 
-- built-in lfo
-
-*/
-
-// the tempo (cps) could be a float (or controlbus)
-// if you have to wait for some cycles, then you just
-// calculate from cycles to seconds to beats on the spot
-// this way, the tempo can become fluid while playing
-
-// maybe better: cycle --< tick(delta) --< step(dur, coin, dict)
-
 Tidy {
     classvar samples, buffers, <recordings;
     classvar <>log=0; 
     classvar step_plugins, cycle_plugins, pattern_plugins, <>midi_out;
-    classvar <>vosc, <common, <glide;
+    classvar <>vosc;
     classvar global_scale, global_root, global_swing, global_swing_n;
 
     classvar cmdperiod, <effectTracks, <controlTracks, <audioTracks;
-    classvar <evaluatingTracks;
+    classvar <evaluatingTracks; // the tracks that have just been evaluated
+    classvar <>numChannels=2; // independant from server, @see *def
+    classvar <gain_and_outputs, <groups, <waves;
 
-    *setup {
-        effectTracks ?? {
-            effectTracks = List.new;
-            9.do { |i| effectTracks.add(EffectTrack.new) }
-        };
-
-        controlTracks ?? { controlTracks = Dictionary.new };
-        audioTracks ?? { audioTracks = Dictionary.new };
-
-        cmdperiod ?? {
-            cmdperiod = {
-                effectTracks.do { |effectTrack| effectTrack.createGroup };
-                JSMainloop.stop;
-            };
-            cmdperiod.value;
-            CmdPeriod.add(cmdperiod);
-        };
-
-        // method newTreeBuilder will have added the track to the list
-        thisProcess.interpreter.codeDump = { Tidy.evaluateTracks };
-
-        Tidy.setup2;
+    *initClass {
+        effectTracks = Dictionary.new;
+        controlTracks = Dictionary.new;
+        audioTracks = Dictionary.new;
+        evaluatingTracks = Set.new;
+        groups = Order.new;
     }
 
     *start { JSMainloop.start }
 
     *stop { JSMainloop.stop }
 
-    *evaluateTracks {
-        evaluatingTracks ?? { evaluatingTracks = Set.new };
-        evaluatingTracks.do { |track| track.evaluated };
-        evaluatingTracks.clear;
-    }
-
-    *addEvaluatingTrack { |track|
-        evaluatingTracks ?? { evaluatingTracks = Set.new };
-        evaluatingTracks.add(track);
-    }
-
-    // all playing patterns will freeze temporarily
-    *freeze { |beats| JSMainloop.shift = abs(beats) }
-
-    // playing patterns continue during the mute
-    *muteall { |beats| JSMute.muteall(abs(beats)) }
-
-    *scale { |symbol, quantize=true|
-        symbol ?? { ^global_scale }; // getter / setter
-        Routine({
-            if(quantize) { JSQuant.quantize };
-            global_scale = Scale.at(symbol) ? Scale.major;
-        }).play;
-    }
-
-    *root { |integer, quantize=true|
-        integer ?? { ^global_root }; // getter / setter
-        if(quantize) {
-            Routine({
-                JSQuant.quantize;
-                global_root = integer;
-            }).play;
-        } {
-            global_root = integer;
-        }
-    }
-
-    // Tidy.freq(nil,0,[\note,2,\degree,0].asDict)
-    *freq { |scale, root, dict|
-        ^Event.partialEvents.at(\pitchEvent)
-        .copy.putAll(dict)
-        .put(\scale, scale ? Scale.major)
-        .put(\root, root ? 0)
-        .use { ~freq.valueEnvir }
-    }
-
-    // TODO: make one function Tidy.swing(float, int, bool)
-    *swing { |float, quantize=true|
-        float ?? { ^global_swing }; // getter / setter
-        Routine({
-            if(quantize) { JSQuant.quantize };
-            global_swing = float;
-        }).play;
-    }
-
-    *swing_n { |integer, quantize=true|
-        integer ?? { ^global_swing_n }; // getter / setter
-        Routine({
-            if(quantize) { JSQuant.quantize };
-            global_swing_n = integer;
-        }).play;
-    }
-
-    *add_step_plugin { |key, plugin|
-        step_plugins ?? { step_plugins = JSPlugins.new };
-        step_plugins.add(key, plugin);
-    }
-
-    *alter_step { |step, track|
-        step_plugins ?? { step_plugins = JSPlugins.new };
-        ^step_plugins.alter(step, track)
-    }
-
-    *add_cycle_plugin { |key, plugin|
-        cycle_plugins ?? { cycle_plugins = JSPlugins.new };
-        cycle_plugins.add(key, plugin);
-    }
-
-    *alter_cycle { |cycle, track|
-        cycle_plugins ?? { cycle_plugins = JSPlugins.new };
-        ^cycle_plugins.alter(cycle, track)
-    }
-
-    *add_pattern_plugin { |key, plugin|
-        pattern_plugins ?? { pattern_plugins = JSPlugins.new };
-        pattern_plugins.add(key, plugin);
-    }
-
-    *alter_pattern { |pattern|
-        pattern_plugins ?? { pattern_plugins = JSPlugins.new };
-        ^pattern_plugins.alter(pattern);
-    }
-
-    *outputs { |bus|
-        bus !? { 
-            if(bus.rate == \control) {
-                ^{ |sig| Out.kr(\out.kr(0), sig) }
+    *setup {
+        thisProcess.interpreter.codeDump = { Tidy.evaluateTracks };
+    
+        gain_and_outputs = { |sig, default_gain=0|
+            sig = sig * \amp.kr(1); 
+            case
+            { sig.rate == \audio } { 
+                var index = \in.kr(0); 
+                sig = sig * \gain.kr(default_gain).clip(0, 1); // @see playStep
+                //Out.ar(index, sig * (index.min(1))); // write your own bus
+                Out.ar(\out0.kr(0), sig * \gain0.kr(1));  // sends
+                Out.ar(\out1.kr(0), sig * \gain1.kr(0)); 
+                Out.ar(\out2.kr(0), sig * \gain2.kr(0));
+                Out.ar(\out3.kr(0), sig * \gain3.kr(0));
+                Out.ar(\out4.kr(0), sig * \gain4.kr(0));
+            } { 
+                Out.kr(\out.kr(0), sig)                  // to control bus
             }
-        };
-
-        ^{ |sig|
-            var index = \in.kr(0); // your own bus
-            Out.ar(index, sig * (index.min(1)));
-
-            // other buses
-            Out.ar(\out.kr(0), sig * \gain0.kr(0.5).clip(0, 1));
-            Out.ar(\out1.kr(0), sig * \gain1.kr(0));
-            Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-            Out.ar(\out3.kr(0), sig * \gain3.kr(0));
-            Out.ar(\out4.kr(0), sig * \gain4.kr(0));
-        }
-    }
-
-    *setup2 {
-        common = { |sig, freq, vel|
-            var lpf;
-
-            // gain and mute use kr buses so that you can mute / fade
-            // long running synths while they are still playing
-            sig = sig * \amp.kr(1); // use for accent patterns
-            sig = sig * \gain.kr(0.5); // fade in/out ("gain 0.3:7")
-            sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) - 1); // inverted
-
-            // this is rather expensive, don't you think?
-            //lpf = \lpf.kr(20000);
-            //lpf = \kt.kr(0).linlin(0, 1, lpf, max(freq * (0.5+vel), lpf));
-            //sig = LPF.ar(sig, lpf.clip(20, 20000));
-        };
-
-        glide = { |sustain|
-            var freq;
-           
-            freq = \freq.kr(60.midicps);
-            freq = Lag.kr(
-                Select.kr(
-                    Line.kr(0, 1, 0.005), 
-                    [\beginfreq.kr(60.midicps), freq]
-                ),
-                \glide.kr(0) * sustain
-            );
         };
 
         this.add_pattern_plugin(\pattern_tags, JSPluginPatternTags.new);
@@ -210,6 +52,7 @@ Tidy {
         this.add_step_plugin(\swing, JSPluginStepSwing.new);
 
         this.add_cycle_plugin(\fill, JSPluginCycleFill.new);
+        this.add_cycle_plugin(\metric, JSPluginCycleMetric.new);
 //        this.add_cycle_plugin(\beats, JSPluginCycleBeats.new);
 
         SynthDef(\controlbus, {
@@ -221,33 +64,36 @@ Tidy {
 
         SynthDef(\mic, {
             var bufnum = \buf.kr(0);
-            var in = In.ar(\in.kr(0), 2);
-
             // make mono to use it with grainbuf / tgrains
-            in = [in.sum];
-
+            var sig = SoundIn.ar(0);
             // highpass to avoid mic rumble
-            in = HPF.ar(in, 200);
-            in = HPF.ar(in, 100);
-            in = LeakDC.ar(in);
-
-            RecordBuf.ar(in, bufnum, loop: 0, doneAction: 2);
+            sig = HPF.ar(sig, 200);
+            sig = HPF.ar(sig, 100);
+            sig = LeakDC.ar(sig);
+            RecordBuf.ar(sig, bufnum, loop: 0, doneAction: 2);
         }).add;
 
         SynthDef(\rec, {
             var bufnum = \buf.kr(0);
-            var in = In.ar(\in.kr(0), 2);
-            RecordBuf.ar([in.sum], bufnum, loop: 0, doneAction: 2);
+            var sig = In.ar(\in.kr(0), 2);
+            RecordBuf.ar([sig.sum], bufnum, loop: 0, doneAction: 2);
         }).add;
 
-        // used to set a value on a control bus
+        // used to set a value on a control bus (gated)
+        // \haha -- \cv - "value 1 2 3 4"
         SynthDef(\cv, {
-            //Env.perc(0, 0.01).kr(2); // short lived..
             Env.asr(0, 1, 0).kr(2, \gate.kr(1));
+            Out.kr(\out.kr(0), \value.kr(0)); // \out is set to control bus
+        }).add;
+
+        // used to set a value on a control bus (percussive)
+        // \haha -- "cv 1 2 3 4"
+        SynthDef(\cvperc, {
+            Env.perc(0, 0.01).kr(2); // short lived..
             Out.kr(\out.kr(0), \cv.kr(0)); // \out is set to control bus
         }).add;
 
-        Tidy.def2(\playbuf2, {
+        Tidy.def(\playbuf2, {
             arg freq, vel, gate, sustain;
             var sig, rate, bufnum, begin, att, rel, crv, loop;
             //
@@ -260,7 +106,8 @@ Tidy {
             begin = \begin.kr(0) * BufFrames.kr(bufnum);
             sig = PlayBuf.ar(2, bufnum, rate, \trig.tr(1), begin, loop);
             sig = LeakDC.ar(sig);
-            sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), 3.dbamp);
+            sig = Splay.ar(sig, \spread.kr(0.3), 1, \pan.kr(0));
+            //sig = Balance2.ar(sig[0], sig[1], \pan.kr(0), 3.dbamp);
             sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
         });
 
@@ -280,7 +127,7 @@ Tidy {
             sig = sig * Env.asr(att, 1, rel, crv).kr(2, gate);
         });
 
-        this.def2(\rumble2, {
+        this.def(\rumble2, {
             arg freq, vel, gate, sustain;
             var sig, rate, bufnum, begin, rumble, env, delay, amount;
             var att, rel, crv;
@@ -330,18 +177,6 @@ Tidy {
             env = Env([0, 1, 1, 0], [att, sustain, rel], crv).kr(2, gate);
             sig * env;
         });
-
-        // some default effect synthdefs
-
-        SynthDef(\gverb, {
-            var sig = In.ar(\in.kr(0), 2) * \gain.kr(1, 1);
-            sig = GVerb.ar(sig, \roomsize.kr(10), 3, drylevel: 0);
-            sig = sig * Env.asr(0.5, 1, 0.5, 0).kr(2, \gate.kr(1));
-            Out.ar(\out1.kr(0), sig * \gain1.kr(0));
-            Out.ar(\out2.kr(0), sig * \gain2.kr(0));
-            Out.ar(\out3.kr(0), sig * \gain3.kr(0));
-            Out.ar(\out4.kr(0), sig * \gain4.kr(0));
-        }).add;
 
         // make 8 vosc wavetables for the vosc synthdef
         Routine {
@@ -397,11 +232,101 @@ Tidy {
                 sig = LR2MS.ar(sig);
                 sig = [DelayC.ar(sig[0], 0.1, 0.0005), sig[1]];
                 sig = MS2LR.ar(sig);
+                sig = LeakDC.ar(sig);
                 //
                 sig;
             });
-
         }.play;
+    }
+
+    *evaluateTracks {
+        evaluatingTracks.do { |track| track.evaluated };
+        evaluatingTracks.clear;
+    }
+
+    *addEvaluatingTrack { |track| evaluatingTracks.add(track) }
+
+    // TODO: *sync : adjust TempoClock.default
+
+    // all playing patterns will freeze temporarily
+    *freeze { |beats| JSMainloop.shift = abs(beats) }
+
+    // playing patterns continue during the mute
+    *muteall { |beats| JSMute.muteall(abs(beats)) }
+
+    *scale { |symbol, quantize=true|
+        symbol ?? { ^global_scale }; // getter / setter
+        Routine({
+            if(quantize) { JSQuant.quantize };
+            global_scale = Scale.at(symbol) ? Scale.major;
+        }).play;
+    }
+
+    *root { |integer, quantize=true|
+        integer ?? { ^global_root }; // getter / setter
+        if(quantize) {
+            Routine({
+                JSQuant.quantize;
+                global_root = integer;
+            }).play;
+        } {
+            global_root = integer;
+        }
+    }
+
+    // Tidy.freq(nil,0,[\note,2,\degree,0].asDict)
+    *freq { |scale, root, dict|
+        ^Event.partialEvents.at(\pitchEvent)
+        .copy.putAll(dict)
+        .put(\scale, scale ? Scale.major)
+        .put(\root, root ? 0)
+        .use { ~freq.valueEnvir }
+    }
+
+    *swing { |float, quantize=true|
+        float ?? { ^global_swing }; // getter / setter
+        Routine({
+            if(quantize) { JSQuant.quantize };
+            global_swing = float;
+        }).play;
+    }
+
+    *swing_n { |integer, quantize=true|
+        integer ?? { ^global_swing_n }; // getter / setter
+        Routine({
+            if(quantize) { JSQuant.quantize };
+            global_swing_n = integer;
+        }).play;
+    }
+
+    *add_step_plugin { |key, plugin|
+        step_plugins ?? { step_plugins = JSPlugins.new };
+        step_plugins.add(key, plugin);
+    }
+
+    *alter_step { |step, track|
+        step_plugins ?? { step_plugins = JSPlugins.new };
+        ^step_plugins.alter(step, track)
+    }
+
+    *add_cycle_plugin { |key, plugin|
+        cycle_plugins ?? { cycle_plugins = JSPlugins.new };
+        cycle_plugins.add(key, plugin);
+    }
+
+    *alter_cycle { |cycle, track|
+        cycle_plugins ?? { cycle_plugins = JSPlugins.new };
+        ^cycle_plugins.alter(cycle, track)
+    }
+
+    *add_pattern_plugin { |key, plugin|
+        pattern_plugins ?? { pattern_plugins = JSPlugins.new };
+        pattern_plugins.add(key, plugin);
+    }
+
+    *alter_pattern { |pattern|
+        pattern_plugins ?? { pattern_plugins = JSPlugins.new };
+        ^pattern_plugins.alter(pattern);
     }
 
     *postline { |w=38| "".padLeft(w+6, "-").postln }
@@ -533,75 +458,56 @@ Tidy {
     }
 
     *def { |name, func, variants|
-        var speakers = Server.default.options.numOutputBusChannels;
-
-        "def %".format(name).postln;
-
-        if(speakers == 4) {
-            ^SynthDef(name, {
-                var sig, vel, freq, sus, gate, pd;
-
-                sus = \sustain.kr(0); // in seconds
-                freq = SynthDef.wrap(Tidy.glide, [], [sus]);
-                gate = \gate.kr(1);
-                vel = \vel.kr(0.5);
-                pd = \pand.kr(0.8).clip(0, 1);
-
-                sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]); // mono
-                sig = SynthDef.wrap(Tidy.common, [], [sig, freq, vel]);
-                sig = Pan4.ar(sig, \pan.kr(0) * pd, \pany.kr(0) * pd);
-                SynthDef.wrap(Tidy.outputs, [], [sig]);
-            }, variants: variants).add;
-        };
-
-        // default to stereo
         ^SynthDef(name, {
-            var sig, vel, freq, sus, gate, lpf;
-
+            var sig, vel, freq, sus, gate, pd, size;
+            //
             sus = \sustain.kr(0); // in seconds
-            freq = SynthDef.wrap(Tidy.glide, [], [sus]);
+            freq = \freq.kr(60.midicps);
+            freq = Line.kr(\beginfreq.kr(60.midicps), freq, \glide.kr(0) * sus);
             gate = \gate.kr(1);
             vel = \vel.kr(0.5);
-
-            sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]); // mono
-            sig = SynthDef.wrap(Tidy.common, [], [sig, freq, vel]);
-            sig = Pan2.ar(sig, \pan.kr(0));
-            SynthDef.wrap(Tidy.outputs, [], [sig]);
-        }, variants: variants).add;
-    }
-
-    // the function delivers a stereo signal already
-    *def2 { |name, func, variants|
-        "def2 %".format(name).postln;
-
-        ^SynthDef(name, {
-            var sig, vel, freq, sus, gate, lpf, ratio;
-            sus = \sustain.kr(0); // in seconds
-            freq = SynthDef.wrap(Tidy.glide, [], [sus]);
-            gate = \gate.kr(1);
-            vel = \vel.kr(0.5);
-            sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]); // stereo
-            sig = SynthDef.wrap(Tidy.common, [], [sig, freq, vel]);
-            SynthDef.wrap(Tidy.outputs, [], [sig]);
+            pd = \pand.kr(0.8).clip(0, 1);
+            //
+            sig = SynthDef.wrap(func, [], [freq, vel, gate, sus]);
+            sig = sig * abs(\mute_bus.kr(0).asInteger.clip(0,1) - 1);
+            if(sig.isArray) { size = sig.size } { size = 1 };
+            "def % % -> %".format(name, size, Tidy.numChannels).postln;
+            // rate (a/c), size (1/2/4), numChannels (1/2/4)
+            case
+            { (sig.rate == \audio) and: (size <= 1) and: (numChannels == 1) } { }
+            { (sig.rate == \audio) and: (size <= 1) and: (numChannels == 2) } 
+            { sig = Pan2.ar(sig, \pan.kr(0)) }
+            { (sig.rate == \audio) and: (size <= 1) and: (numChannels == 4) } 
+            { sig = Pan4.ar(sig, \pan.kr(0) * pd, \pany.kr(0) * pd) }
+            //
+            { (sig.rate == \audio) and: (size == 2) and: (numChannels == 1) }
+            { sig = sig.sum }
+            { (sig.rate == \audio) and: (size == 2) and: (numChannels == 2) } { }
+            { (sig.rate == \audio) and: (size == 2) and: (numChannels == 4) } 
+            { sig = Pan4.ar(sig, \pan.kr(0) * pd, \pany.kr(0) * pd) } // test
+            //
+            { (sig.rate == \audio) and: (size == 4) and: (numChannels == 1) }
+            { sig = sig.sum }
+            { (sig.rate == \audio) and: (size == 4) and: (numChannels == 2) }
+            { sig = [sig[0] + sig[2], sig[1] + sig[3]] }
+            { (sig.rate == \audio) and: (size == 4) and: (numChannels == 4) } { };
+            //
+            SynthDef.wrap(Tidy.gain_and_outputs, [], [sig, 0]);
         }, variants: variants).add;
     }
 
     *fx { |name, func|
         "fx %".format(name).postln;
         ^SynthDef(name, {
-            var fade = \fade.kr(0.2);
-            var sig = SynthDef.wrap(
-                func, 
-                [],
-                [
-                    In.ar(\in.kr(0), 2),  // bus
-                    In.ar(\in2.kr(0), 2), // bus2
-                ]
-            );
-            sig = sig * \amp.kr(1); // you can use patterns..
+            var index = \in.kr(0); 
+            var fade = \fade.kr(2); // 2 seconds fade in/out
+            var in = In.ar(index, Tidy.numChannels);
+            var in2 = In.ar(\in2.kr(0), Tidy.numChannels);
+            var sig = SynthDef.wrap(func, [], [in, in2]);
+            //
             // make sure that this node can be released
             sig = sig * Env.asr(fade, 1, fade).kr(2, \gate.kr(1));
-            SynthDef.wrap(Tidy.outputs, [], [sig]);
+            SynthDef.wrap(Tidy.gain_and_outputs, [], [sig, 1]);
         }).add;
     }
 
@@ -651,15 +557,13 @@ Tidy {
     }
 
     *mic { |name, cycles=1, nudge=0|
-        this.rec(name, cycles, 2, nudge);
+        this.rec(name, cycles, 0, nudge, \mic);
     }
 
-    *rec { |name, cycles, bus, nudge=0|
+    *rec { |name, cycles, bus, nudge=0, def=\rec|
         recordings ?? { recordings = Dictionary.new };
         Routine({
-            var seconds, buf, old, now, def, s = Server.default;
-
-            case { bus == 2 } { def = \mic } { def = \rec };
+            var seconds, buf, old, now, s = Server.default;
 
             cycles = cycles.asInteger;
             seconds = cycles / TempoClock.tempo; // 1 cycle = 1 beat
@@ -688,7 +592,7 @@ Tidy {
             recordings.put(name.asSymbol, buf);
             old !? { |b| b.free };
 
-            "record finished".postln;
+            "record finished %".format(buf).postln;
         }).play;
     }
 
@@ -726,222 +630,34 @@ Tidy {
     *mute { |str_or_symbol| JSMute.mute(str_or_symbol) }
     *unmute { |str_or_symbol| JSMute.unmute(str_or_symbol) }
 
-    /*
-    send MIDICLOCK to some device (24 messages per beat):
-
-    1: \tidy .midiout
-    2: connect midi with jack
-    3: \clock -- "n 0!96" - "midiclock 1"
-    */
-    *midiout {
-        Routine({
-            // connect with QJackCtl to CH345 device ("OUT" means out)
-            MIDIClient.init;
-            Server.default.sync;
-            Tidy.midi_out = MIDIOut(0);
-            "*** midiout ready : connect using jack now ***".postln;
-        }).play;
-    }
-}
-
-EffectTrack : AbstractTrack {
-    *new { ^super.new.init }
-
-    init {
-        bus = Bus.audio(Server.default, 2);
-        bus2 = Bus.audio(Server.default, 2);
-    }
-
-    createGroup { 
-        group ?? { group = Group.new(Server.default).onFree { group = nil }}
-    }
-
-    evaluated { this.playTree }
-
-    getName { ^(Tidy.effectTracks.indexOf(this) + 1).asSymbol }
-
-    playStep { |step|
-        var tempo = TempoClock.tempo;
-
-        this.read_calculation_values_from_buses(step);
-        this.map_buses(step);
-        step = Tidy.alter_step(step, this); // calculates freq
-        this.calculate_sustain(step, tempo);
-        this.calculate_last_freq(step);
-
-        Routine({
-            var server = Server.default;
-            var sustain = step.at(\sustain);
-            var args = this.map_sends_and_buses(step.dict).asPairs;
-
-            this.log_step(step, args);
-            this.wait_late(step, tempo);
-
-            case
-            // launch the effect synth..
-            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) }
-            { this.launch_function_or_symbol(server, args, sustain) }
-            // ..or set arguments on the effect group
-            {
-                args = args ++ [ \_trig, 1 ];
-                server.bind { group.performList(\set, args) }
-            }
-        }).play;
-    }
-}
-
-ControlTrack : AbstractTrack {
-    *new { ^super.new.init }
-
-    init { bus = Bus.control(Server.default, 1) }
-
-    createGroup { 
-        group ?? { group = Group.new(Server.default).onFree { group = nil }};
-    }
-
-    evaluated {
-        this.createGroup;
-        this.playTree;
-    }
-
-    getName { ^Tidy.controlTracks.findKeyForValue(this) }
-
-    playStep { |step|
-        var tempo = TempoClock.tempo;
-
-        this.read_calculation_values_from_buses(step);
-        this.map_buses(step);
-        step = Tidy.alter_step(step, this);
-        this.calculate_sustain(step, tempo);
-        this.calculate_last_freq(step);
-
-        Routine({
-            var server = Server.default;
-            var sustain = step.at(\sustain);
-            var args = this.map_sends_and_buses(step.dict);
-            args.put(\out, bus.index);
-            args = args.asPairs;
-
-            this.log_step(step, args);
-            this.wait_late(step, tempo);
-
-            case
-            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) } 
-            { this.launch_function_or_symbol(server, args, sustain) }
-            { step.has(\cv) } {
-                var note;
-                // kill running function_or_symbol
-                server.bind { group.set(\gate, 0) }; 
-                // play a note, and shut it's gate later
-                server.bind { note = Synth(\cv, args) };
-                (sustain * tempo).wait; // in beats
-                server.bind { note.set(\gate, 0) };
-            }
-            {
-                args = args ++ [ \_trig, 1 ];
-                server.bind { group.performList(\set, args) }
-            }
-        }).play;
-    }
-}
-
-AudioTrack : AbstractTrack {
-    var <gain_bus, mute_bus, last_mute;
-
-    *new { ^super.new.init }
-
-    init {
-        bus = Bus.audio(Server.default, 2);
-        gain_bus = JSControlBus("gain");
-        mute_bus = JSControlBus("mute");
-    }
-    
-    hush { |seconds=0.02|
-        if(hushing.not) { gain_bus.reset(seconds) };
-        super.hush(seconds);
-    }
-    
-    createGroup { 
-        group ?? { group = Group.new(Server.default).onFree { group = nil }};
-    }
-
-    evaluated {
-        this.createGroup;
-        JSMute.unmute(this.getName);
-        this.playTree;
-    }
-
-    set_gain_and_mute_bus { |step|
-        // set value for the gain bus, except when hushing
-        if(hushing.not) {
-            gain_bus.set(
-                (step.at(\gain) ? 0.5).asFloat,
-                max(0.02, (step.at(\gain_n) ? 0).asFloat)
-            );
+    *loadwaves { |path, server|
+        var files;
+        server = server ? Server.default;
+        // deallocate loaded buffers, if any
+        Tidy.waves !? { 
+            var local = Tidy.waves; // copy current pointer!
+            Routine { local.do { |buffer| buffer.free } }.play;
         };
-
-        step.put(\gain, gain_bus.bus);
-        step.put(\mute, mute_bus.bus);
-    }
-
-    getName { ^Tidy.audioTracks.findKeyForValue(this) }
-
-    playStep { |step|
-        var tempo = TempoClock.tempo;
-
-        if(step.should_play(this).not) { ^this };
-
-        this.set_gain_and_mute_bus(step);
-        this.read_calculation_values_from_buses(step);
-        this.map_buses(step);
-        step = Tidy.alter_step(step, this); // all plugins do their thing
-        this.calculate_sustain(step, tempo);
-        this.calculate_last_freq(step);
-
+        // load new buffers while old buffers are freed
+        path = (path ? "~").standardizePath;
+        files = (path +/+ "*.wtable").pathMatch;
         Routine({
-            var server = Server.default;
-            var sustain = step.at(\sustain);
-            var args = this.map_sends_and_buses(step.dict).asPairs;
-
-            this.log_step(step, args);
-            this.wait_late(step, tempo);
-
-            case
-            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) } 
-            { this.launch_function_or_symbol(server, args, sustain, 0.5) }
-
-            { step.has(\def) } {
-                var def = step.at(\def).asSymbol;
-                if(SynthDescLib.at(def).isNil) {
-                    if(hushing.not) { "def % unknown".format(def).postln }
-                } {
-                    var note;
-                    // kill running function_or_symbol
-                    server.bind { group.set(\gate, 0) }; 
-                    // play a note, and shut it's gate later
-                    server.bind { note = Synth(def, args) };
-                    (sustain * tempo).wait; // in beats
-                    server.bind { note.set(\gate, 0) };
-                }
-            }
-            {
-                args = args ++ [ \_trig, 1 ];
-                server.bind { group.performList(\set, args) }
-            }
+            Tidy.waves = Buffer.allocConsecutive(
+                numBufs: files.size,
+                server: server,
+                numFrames: 1024,
+                numChannels: 1,
+                completionMessage: { |buf, i| buf.readMsg(files[i]) }
+            );
+            server.sync;
+            "loaded % waves, first: %".format(files.size, Tidy.waves[0])
+            .postln;
         }).play;
-    }
-    
-    // reason for mute buses: it mutes running synths.
-    // the last_mute variable is cheaper than mute_bus.getSynchronous.
-    set_mute_bus { |new_mute|
-        if(new_mute == last_mute) { ^this };
-        mute_bus !? { mute_bus.set(new_mute) }; // 0 or 1
-        last_mute = new_mute;
     }
 }
 
 AbstractTrack {
-    var function_or_symbol, <group; //, synth; // synth to launch nextTimeOnGrid
+    var function_or_symbol;
     var hushing=false, hushed=false;
     var treeBuilder, treePlayer;
     var last_freq; // for glide
@@ -949,9 +665,76 @@ AbstractTrack {
     var <bus;
     var <bus2;
 
+    defaultGain { ^0 }
+
+    printOn { |stream|
+        stream << "%".format(this.getName);
+    }
+
     newTreeBuilder { 
         Tidy.addEvaluatingTrack(this);
         ^(treeBuilder = TreeBuilder.new(this));
+    }
+
+    /*
+    how to create groups on the fly in the "right order"?
+
+    create an index based on the name of each track:
+    numbers -> the number is the index
+    single letters -> char.ascii (a starts at hundred something)
+    the rest -> index = 999
+
+    put the Group objects for the tracks in an Order object, by the index
+
+    in the Order object, you can find the Group object just before you,
+    and with that one as target, you move the Group that you just created.
+    this way, the order in the server will match the order in the Order object.
+
+    getGroup just looks up the object in the Order
+
+    group.moveBefore(otherGroup)
+    */
+
+    getGroupIndex {
+        var n = this.getName.asString;
+        case
+        { n.asInteger.asString == n } 
+        { ^n.asInteger.min($a.ascii - 1) } // 0 .. 96
+        { n.size == 1 } { ^n.at(0).ascii } // 97 .. 123
+        {
+            var index = n.hash; // a negative or positive integer
+            if(index >= 0) { index = index + 200 }; // avoid 0 .. 200
+            ^index;
+        }
+    }
+
+    getGroup { ^Tidy.groups.at(this.getGroupIndex) }
+
+    createGroupIfNotExists {
+        var index = this.getGroupIndex;
+        "% groupindex %".format(this.getName, index).postln;
+        Tidy.groups.at(index) ?? {
+            var targetIndex, target, add, indices;
+
+            indices = Tidy.groups.indices;
+            targetIndex = indices.indexOfGreaterThan(index);
+            "%   targetIndex %".format(this.getName, targetIndex).postln;
+            case
+            { index < 0 } { add = \addToHead }
+            { targetIndex.isNil } { add = \addToHead }
+            { targetIndex <= 0 } { add = \addToTail }
+            { 
+                target = Tidy.groups.at(indices.at(targetIndex));
+                add = \addAfter;
+            };
+
+            "%   add % target %".format(this.getName, add, target).postln;
+
+            Tidy.groups.put(
+                index,
+                Group.new(target, add).onFree { Tidy.groups.removeAt(index) }
+            );
+        }
     }
 
     playTree { 
@@ -973,7 +756,7 @@ AbstractTrack {
         if(treeBuilder.status == \build) {
             // feedback to user
             if(Tidy.log == \tree) { treeBuilder.log };
-            "%% pattern".format("\\", name).postln;
+            //"%% pattern".format("\\", name).postln;
 
             treePlayer = TreePlayer.new(treeBuilder.tree, this, name);
             treeBuilder = nil;
@@ -983,9 +766,9 @@ AbstractTrack {
         }
     }
 
-    play_cycle  { |cycle_number|
+    playCycle  { |cycle_number|
         if(hushed.not and: treePlayer.notNil) { 
-            treePlayer.play_cycle(cycle_number)
+            treePlayer.playCycle(cycle_number)
         }
     }
 
@@ -994,7 +777,7 @@ AbstractTrack {
         Routine({
             (seconds * TempoClock.tempo).wait;
             hushed = true; // new cycles will not play
-            group !? { group.set(\gate, 0) };
+            this.getGroup !? { |group| group.set(\gate, 0) };
             treeBuilder = nil;
             treePlayer = nil;
         }).play;
@@ -1007,10 +790,10 @@ AbstractTrack {
         };
     }
     
-    launch_function_or_symbol { |server, args, sustain, gain=1|
-        var function_or_symbol_copy;
+    launch_function_or_symbol { |server, args, sustain|
+        var function_or_symbol_copy, group;
 
-        args = args ++ [ \_trig, 1 ];
+        group = this.getGroup;
 
         // (re)launch only during first step after code evaulation
         function_or_symbol_copy = function_or_symbol;
@@ -1029,20 +812,8 @@ AbstractTrack {
                 {
                     var sig, in, in2=0, fade;
 
-                    in = SynthDef.wrap(
-                        { |i, c| In.ar(i, c) },
-                        [],
-                        [bus.index, bus.numChannels]
-                    );
-
-                    // only for effectTracks..
-                    bus2 !? {
-                        in2 = SynthDef.wrap(
-                            { |i, c| In.ar(i, c) },
-                            [],
-                            [bus2.index, bus2.numChannels]
-                        );
-                    };
+                    in = In.ar(bus.index, bus.numChannels);
+                    bus2 !? { in2 = In.ar(bus2.index, bus2.numChannels) };
 
                     sig = SynthDef.wrap(
                         function_or_symbol_copy,
@@ -1054,9 +825,11 @@ AbstractTrack {
 
                     // diy release because sc uses doneAction 0
                     sig = sig * Env.asr(fade, 1, fade).kr(2, \gate.kr(1));
-                    sig = sig * \amp.kr(1) * \gain.kr(gain);
-                    sig = sig * abs(\mute.kr(0).asInteger.clip(0,1) -1); 
-                    SynthDef.wrap(Tidy.outputs(bus), [], [sig]);
+                    SynthDef.wrap(
+                        Tidy.gain_and_outputs, 
+                        [], 
+                        [sig, this.defaultGain]
+                    );
                 }.play(
                     outbus: 0, // not used because i use Out ugen
                     fadeTime: 0.02, // not used because i use own Env
@@ -1064,7 +837,7 @@ AbstractTrack {
                     target: group
                 );
             }
-        } {
+        } { // it's a symbol
             server.bind {
                 Synth(function_or_symbol_copy, args, group);
             }
@@ -1099,42 +872,37 @@ AbstractTrack {
             bus !? { args.put(\in, bus.index) }; // your own bus
         };
 
-        // analyze \mix value (assumes Fx names 1,2,3 etc)
-        args.at(\mix) !? { |hex|
-            hex.do { |gain, i|
-                if(i <= 0) {
-                    sends.put(0, gain.digit.linlin(0, 15, 0, 1).asFloat);
-                } {
-                    Tidy.effectTracks.at(i - 1) !? { |t| 
-                        sends.put(
-                            t.bus.index,
-                            gain.digit.linlin(0, 15, 0, 1).asFloat
-                        );
-                    }
-                }
-            }
+        if(args.includesKey(\in2).not) {
+            bus2 !? { args.put(\in2, bus2.index) }; // your own secondary bus
         };
 
         args.keysValuesDo { |k, v|
             if(v.asString.at(0) == $=) {
+                // TODO: ranges like "lpf =(k1,200,2000)"
                 Tidy.controlTracks.at(v.asString.drop(1).asSymbol) !? { |t|
                     v = t.bus.asMap
                 };
             };
 
+            // supported: "> 0.2", ">1 0.3", ">>4 0.1"
             case
-            { k.asString.at(0) == $> } {
-                var key = k.asString.drop(1);
-                if(key == "") { key = "0" };
+            { k.asString.size == 1 and: k.asString.at(0) == $> } { sends.put(\0, v) }
+            { k.asString.size >= 3 and: k.asString.at(0) == $> and: k.asString.at(1) == $> } {
+                var key = k.asString.drop(2);
                 if(key.asInteger.asString == key) {
-                    key = key.asInteger;
-                    if(key <= 0) {
-                        sends.put(0, v);
-                    } {
-                        Tidy.effectTracks.at(key - 1) !? { |t|
-                            sends.put(t.bus.index, v)
+                    Tidy.effectTracks.at(key.asSymbol) !? { |t| sends.put(t.bus2.index, v) }
+                } {
+                    Tidy.effectTracks.do { |t|
+                        if(t.nickname == key.asString) {
+                            sends.put(t.bus2.index, v);
                         }
                     }
+                }
+            }
+            { k.asString.size >= 2 and: k.asString.at(0) == $> } {
+                var key = k.asString.drop(1);
+                if(key.asInteger.asString == key) {
+                    Tidy.effectTracks.at(key.asSymbol) !? { |t| sends.put(t.bus.index, v) }
                 } {
                     Tidy.effectTracks.do { |t|
                         if(t.nickname == key.asString) {
@@ -1143,7 +911,6 @@ AbstractTrack {
                     };
                     Tidy.audioTracks.at(key.asSymbol) !? { |t|
                         sends.put(t.bus.index, v);
-                        key.debug("sending %".format(v));
                     }
                 }
             } {
@@ -1151,16 +918,17 @@ AbstractTrack {
             }
         };
 
+        sends.at(\0) !? { |v|
+            newargs.put(\out0, 0);
+            newargs.put(\gain0, v);
+            sends.removeAt(\0);
+        };
+
         n = 1;
         sends.keysValuesDo { |k, v|
-            if(k == 0) {
-                newargs.put(\out, 0);
-                newargs.put(\gain0, v); // override the default gain
-            } {
-                newargs.put(("out"++n).asSymbol, k);
-                newargs.put(("gain"++n).asSymbol, v);
-                n = n + 1;
-            }
+            newargs.put(("out"++n).asSymbol, k);
+            newargs.put(("gain"++n).asSymbol, v);
+            n = n + 1;
         };
 
         ^newargs;
@@ -1173,7 +941,7 @@ AbstractTrack {
         }
     }
 
-    calculate_last_freq { |step|
+    calculate_beginfreq { |step|
         var freq = step.at(\freq);
         step.put(\beginfreq, last_freq ? freq);
         last_freq = freq;
@@ -1190,7 +958,7 @@ AbstractTrack {
             }
         }
     }
-            
+
     wait_late { |step, tempo|
         var late;
         late = (step.at(\late_n) ? 0) + (step.at(\latems) ? 0) /1000*tempo;
@@ -1199,75 +967,288 @@ AbstractTrack {
     }
 }
 
-TreePlayer {
-    var tree, owner, trackName, curtree, queue, once=false;
+EffectTrack : AbstractTrack {
+    *new { ^super.new.init }
 
-    *new { |tree, owner, trackName| ^super.newCopyArgs(tree, owner, trackName) }
+    init {
+        bus = Bus.audio(Server.default, Tidy.numChannels);
+        bus2 = Bus.audio(Server.default, Tidy.numChannels);
+    }
 
-    play_cycle { |cycle_number|
-        var steps = [], delta = 1;
+    defaultGain { ^1 }
+
+    evaluated { 
+        this.createGroupIfNotExists;
+        this.playTree;
+    }
+
+    getName { ^Tidy.effectTracks.findKeyForValue(this) }
+
+    playStep { |step|
+        var tempo = TempoClock.tempo;
+        var group = this.getGroup;
+
+        this.read_calculation_values_from_buses(step);
+        this.map_buses(step);
+        step = Tidy.alter_step(step, this); // calculates freq
+        this.calculate_sustain(step, tempo);
+        this.calculate_beginfreq(step);
 
         Routine({
-            queue ?? { queue = List.new };
+            var server = Server.default;
+            var sustain = step.at(\sustain);
+            var args = this.map_sends_and_buses(step.dict).asPairs;
 
-            while { delta > 0.0001 } {
-                var step, clone, slow, fast;
+            this.log_step(step, args);
+            this.wait_late(step, tempo);
 
-                if(queue.size <= 0) {
-                    var cycle;
-                    cycle = tree.get(JSTidyCycle.new, trackName);
-                    cycle = Tidy.alter_cycle(cycle, this);
-                    if(Tidy.log == \cycle) { cycle.postln };
-                    queue.addAll(cycle.steps);
-                };
-
-                if(queue.size <= 0) {
-                    delta = 0; // stop this loop
-                } {
-                    step = queue.removeAt(0);
-
-                    slow = step.dict.removeAt(\slow) ? 1;
-                    if(slow.class == Bus) { slow = slow.getSynchronous };
-                    fast = step.dict.removeAt(\fast) ? 1;
-                    if(fast.class == Bus) { fast = fast.getSynchronous };
-                    slow = slow / fast;
-
-                    step.delta = step.delta * slow;
-                    step.dur = step.dur * slow;
-
-                    if(delta >= step.delta) {
-                        delta = delta - step.delta;
-                    } {
-                        // insert a rest step at head of the queue
-                        queue.insert(0,	JSTidyStep.rest(step.delta-delta));
-                        step.delta = delta;
-                        delta = 0;
-                    };
-
-                    // mark the first step of the new cycle
-                    // this is the only step that may launch a new
-                    // function_or_symbol synth (unless keep==1)
-                    if(steps.size <= 0) { step.put(\_first, 1) };
-
-                    steps = steps.add(step);
-                }
-            };
-
-            delta = 0;
-            steps.do({ |step|
-                // a step needs to know where in the cycle it starts    
-                step.put(\_onset, delta);
-                delta = delta + step.delta;
-                owner.playStep(step);
-                if((step.at(\once) ? 0) > 0) { once = true };
-                step.delta.wait;
-            });
+            case
+            // launch the effect synth..
+            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) }
+            { this.launch_function_or_symbol(server, args, sustain) }
+            // ..or set arguments on the effect group
+            { server.bind { group.performList(\set, args) } }
         }).play;
     }
 }
 
+ControlTrack : AbstractTrack {
+    *new { ^super.new.init }
+
+    init { bus = Bus.control(Server.default, 1) }
+
+    evaluated {
+        this.createGroupIfNotExists;
+        this.playTree;
+    }
+
+    getName { ^Tidy.controlTracks.findKeyForValue(this) }
+
+    playStep { |step|
+        var tempo = TempoClock.tempo;
+        var group = this.getGroup;
+
+        this.read_calculation_values_from_buses(step);
+        this.map_buses(step);
+        step = Tidy.alter_step(step, this);
+        this.calculate_sustain(step, tempo);
+        this.calculate_beginfreq(step);
+
+        Routine({
+            var server = Server.default;
+            var sustain = step.at(\sustain);
+            var args = this.map_sends_and_buses(step.dict);
+            args.put(\out, bus.index); // write your own bus
+            args = args.asPairs;
+
+            this.log_step(step, args);
+            this.wait_late(step, tempo);
+
+            case
+            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) } 
+            { this.launch_function_or_symbol(server, args, sustain) }
+            { this.getName.asString.beginsWith("osc") }
+            {
+                // send osc message
+                var host, port, msg;
+                host = step.at(\host) ? "localhost";
+                port = (step.at(\port) ? "1234").asInteger;
+                msg = step.at(\msg) ? "msg";
+                msg = [ msg ] ++ step.dict.asPairs;
+                NetAddr(host, port).sendMsg(*msg.debug("sending osc"));
+                // you could do this AND set controlbus value
+                // the "cv" key could then change visuals and sound at once
+            }
+            { step.has(\cv) } {
+                var note;
+                // kill running function_or_symbol, if any
+                server.bind { group.set(\gate, 0) }; 
+                // play a short-lived "note" which sets the controlbus value
+                server.bind { note = Synth(\cvperc, args) };
+            }
+            {
+                server.bind { group.performList(\set, args) }
+            }
+        }).play;
+    }
+}
+
+AudioTrack : AbstractTrack {
+    var <gain_bus, <mute_bus, last_mute;
+
+    *new { ^super.new.init }
+
+    init {
+        bus = Bus.audio(Server.default, Tidy.numChannels);
+        gain_bus = JSControlBus("gain");
+        mute_bus = JSControlBus("mute");
+    }
+    
+    printOn { |stream|
+        stream << "% (gain: %)".format(this.getName, gain_bus.get.round(0.01)); 
+    }
+
+    hush { |seconds=0.02|
+        if(hushing.not) { gain_bus.reset(seconds) };
+        super.hush(seconds);
+    }
+    
+    evaluated {
+        this.createGroupIfNotExists;
+        JSMute.unmute(this.getName);
+        this.playTree;
+    }
+
+    getName { ^Tidy.audioTracks.findKeyForValue(this) }
+
+    playStep { |step|
+        var tempo = TempoClock.tempo;
+        var group = this.getGroup;
+
+        // set gain_bus value
+        // only first step of a cycle can do this
+        // do not do this when you are hushing
+        // a rest step can do this too, so test coin after this
+        if(((step.at(\_first) ? 0) > 0) and: hushing.not) {
+            gain_bus.set(
+                (step.at(\gain) ? 0.5).asFloat,
+                max(0.02, (step.at(\gain_n) ? 0).asFloat)
+            );
+        };
+
+        step.put(\gain, gain_bus.bus);
+        step.put(\mute, mute_bus.bus);
+        if(step.should_play(this).not) { ^this };
+        this.read_calculation_values_from_buses(step);
+        this.map_buses(step);
+        step = Tidy.alter_step(step, this); // all plugins do their thing
+        this.calculate_sustain(step, tempo);
+        this.calculate_beginfreq(step);
+
+        Routine({
+            var server = Server.default;
+            var sustain = step.at(\sustain);
+            var args = this.map_sends_and_buses(step.dict).asPairs;
+
+            this.log_step(step, args);
+            this.wait_late(step, tempo);
+
+            case
+            { function_or_symbol.notNil and: ((step.at(\_first) ? 0) > 0) } 
+            { this.launch_function_or_symbol(server, args, sustain) }
+
+            { step.has(\def) } {
+                var def = step.at(\def).asSymbol;
+                if(SynthDescLib.at(def).isNil) {
+                    if(hushing.not) { "def % unknown".format(def).postln }
+                } {
+                    var note;
+                    // kill running function_or_symbol
+                    server.bind { group.set(\gate, 0) }; 
+                    // play a note, wait, and shut it's gate
+                    server.bind { note = Synth(def, args) };
+                    (sustain * tempo).wait; // in beats
+                    server.bind { note.set(\gate, 0) };
+                }
+            }
+            {
+                server.bind { group.performList(\set, args) }
+            }
+        }).play;
+    }
+    
+    // reason for mute buses: it mutes running synths.
+    // the last_mute variable is cheaper than mute_bus.getSynchronous.
+    set_mute_bus { |new_mute|
+        if(new_mute == last_mute) { ^this };
+        mute_bus !? { mute_bus.set(new_mute) }; // 0 or 1
+        last_mute = new_mute;
+    }
+}
+
+TreePlayer {
+    var tree, owner, trackName, curtree, queue, once;
+
+    *new { |tree, owner, trackName| ^super.newCopyArgs(tree, owner, trackName) }
+
+    playCycle { |cycle_number|
+        var steps = [], delta = 1, playIt=true;
+
+        // the previous cycle has set the once varable to true
+        // so do not play the next cycle and also terminate any
+        // launched synth in the group that might still play
+        once !? {
+            if(once <= 0) {
+                playIt = false;
+                Server.default.bind { owner.getGroup.set(\gate, 0) }; 
+            } {
+                once = once - 1;
+            }
+        };
+
+        if(playIt) {
+            Routine({
+                queue ?? { queue = List.new };
+
+                while { delta > 0.0001 } {
+                    var step, clone, slow, fast;
+
+                    if(queue.size <= 0) {
+                        var cycle;
+                        cycle = tree.get(JSTidyCycle.new, trackName);
+                        cycle = Tidy.alter_cycle(cycle, this);
+                        if(Tidy.log == \cycle) { cycle.postln };
+                        queue.addAll(cycle.steps);
+                    };
+
+                    if(queue.size <= 0) {
+                        delta = 0; // stop this loop
+                    } {
+                        step = queue.removeAt(0);
+
+                        slow = step.dict.removeAt(\slow) ? 1;
+                        if(slow.class == Bus) { slow = slow.getSynchronous };
+                        fast = step.dict.removeAt(\fast) ? 1;
+                        if(fast.class == Bus) { fast = fast.getSynchronous };
+                        slow = slow / fast;
+
+                        step.delta = step.delta * slow;
+                        step.dur = step.dur * slow;
+
+                        if(delta >= step.delta) {
+                            delta = delta - step.delta;
+                        } {
+                            // insert a rest step at head of the queue
+                            queue.insert(0,	JSTidyStep.rest(step.delta-delta));
+                            step.delta = delta;
+                            delta = 0;
+                        };
+
+                        // mark the first step of the new cycle
+                        // this is the only step that may launch a new
+                        // function_or_symbol synth (unless keep==1)
+                        if(steps.size <= 0) { step.put(\_first, 1) };
+
+                        steps = steps.add(step);
+                    }
+                };
+
+                delta = 0;
+                steps.do({ |step|
+                    // a step needs to know where in the cycle it starts    
+                    step.put(\_onset, delta);
+                    delta = delta + step.delta;
+                    owner.playStep(step);
+                    once ?? { step.at(\once) !? { |v| once = v.asInteger-1}};
+                    step.delta.wait;
+                });
+            }).play;
+        }
+    }
+}
+
 TreeBuilder {
-    var owner; // who owns this TreeBuilder
+    var owner; // who owns this TreeBuilder (a Track)
     var <tree; // the root of the tree that is built
     var cur;   // the current leaf in the tree ("where we are")
     
@@ -1280,6 +1261,8 @@ TreeBuilder {
 
     *new { |owner| ^super.newCopyArgs(owner) }
 
+    printOn { |stream| owner.printOn(stream) }
+
     // if you make a mistake, you might get here.
     // printOn will do nothing if status is \error: current sound keeps playing
     doesNotUnderstand { |selector ... args|
@@ -1287,9 +1270,11 @@ TreeBuilder {
         "% not understood".format(selector).throw;
     }
 
+    log { tree.log }
+
     // to support "stack" and "seq" functions
     -- { |array|
-        array.do { |treePlayer|	cur.add(treePlayer.tree) };
+        array.do { |treeBuilder| cur.add(treeBuilder.tree) };
 
         // the next node must be added AFTER the array of TreePlayers
         while { cur.parent.notNil.and(cur.is_branch.not) } {
@@ -1301,6 +1286,11 @@ TreeBuilder {
     mkleaf { |str|
         var tag, pat, class;
 
+        if(str.isFunction or: (str.class == Symbol)) {
+            owner.launch(str);
+            str = "_function_or_symbol 1";
+        };
+
         str = str.split($ );
         tag = str.removeAt(0);
         pat = str.join($ ).stripWhiteSpace;
@@ -1310,6 +1300,10 @@ TreeBuilder {
         case
         { pat[0] == $# }
         { ^JSTidyFP_List(tag, pat.drop(1).stripWhiteSpace) }
+        { tag.endsWith("$") }     // any tag can be hex now
+        { ^JSTidyFP_Hex(tag.drop(-1), pat) }
+        { tag == "hex" }          // to keep old code working..
+        { ^JSTidyFP_Hex(tag, pat) }
         {
             class = "%%".format(tag[0].toUpper, tag.drop(1).toLower);
             class = "JSTidyFP_%".format(class).asSymbol.asClass;
@@ -1377,7 +1371,9 @@ TreeBuilder {
             if(child.val == "_function_or_symbol") { direction = \right };
         };
 
-        if(cur.alwaysCombineRight) { direction = \right };
+        if(cur.alwaysCombineRight and: cur.lastchild.isNil) { 
+            direction = \right
+        };
 
         case
         { direction == \both }
@@ -1463,9 +1459,9 @@ JSMainloop {
             JSQuant.quantize; // use the TempoClock.default nextTimeOnGrid
             loop {
                 //"play cycle %".format(cycle_number).postln;
-                Tidy.controlTracks.do { |p| p.play_cycle(cycle_number) };
-                Tidy.effectTracks.do { |p| p.play_cycle(cycle_number) };
-                Tidy.audioTracks.do { |p| p.play_cycle(cycle_number) };
+                Tidy.controlTracks.do { |p| p.playCycle(cycle_number) };
+                Tidy.effectTracks.do { |p| p.playCycle(cycle_number) };
+                Tidy.audioTracks.do { |p| p.playCycle(cycle_number) };
                 1.wait;
                 cycle_number = cycle_number + 1;
                 if(shift > 0) {
@@ -1648,7 +1644,7 @@ JSTidyFP : JSTidyNode {
 
                     { 
                         // these all need to be String objects in step dict
-                        var values = ";map;mix;sound;log;name;def;scale;beat;";
+                        var values = ";map;fx;sound;log;name;def;scale;beat;";
                         values.contains(";"++val++";")
                     }
                     { step.put(val.asSymbol, str) }
@@ -1815,17 +1811,17 @@ JSTidyFP_Every : JSTidyNode {
 // use hex number(s) to create structure: - "hex 4026" - "b 0" - "s bd" -
 JSTidyFP_Hex : JSTidyNode {
 
-    *new { |pattern|
-        var instance = super.new("hex");
-        if(pattern.size > 0) { instance.add(JSTidyHexPattern(pattern)) };
-        ^instance;
+    *new { |val, pattern|
+        var instance = super.new(val);
+        if(pattern.size <= 0) { pattern = "1" };
+        ^instance.add(JSTidyHexPattern(pattern));
     }
 
     get { |cycle, trackName|
         cycle = children.first.get(cycle, trackName);
 
         cycle.steps.do { |step|
-            step.put(\hex, step.at(\str).asString);
+            step.put(val.asSymbol, step.at(\str).asInteger);
             step.put(\str, nil);
             step.put(\num, nil);
         };
@@ -2209,12 +2205,8 @@ JSTidyFP_Do : JSTidyNode {
         count = count - 1;
 
         children.drop(-1).do { |ch|
-            ch.debug("child modifies cycle");
-            cycle.debug("this is the cycle");
             cycle = ch.get(cycle, trackName)
         };
-
-        cycle.debug("cycle at count %".format(count));
 
         time = 0;
         cycle.steps.do { |step|
@@ -2234,8 +2226,6 @@ JSTidyFP_Do : JSTidyNode {
 
             time = time + step.delta;
         };
-
-        cycle.debug("returned cycle at count %".format(count));
 
         ^cycle;
     }
@@ -2615,13 +2605,13 @@ JSTidyHexPattern : JSTidyNode {
             // str should be a hex string
             bits = step[3].collectAs({|c|
                 c.digit.min(15).asBinaryDigits(4)
-            }, Array).flatten * step[0];
+            }, Array).flatten;
 
             delta = step[1] / bits.size;
             dur = step[2] / bits.size;
 
             bits.do { |bit|
-                steps.add([bit, delta, dur, "~1"[bit], step[4]]);
+                steps.add([bit * step[0], delta, dur, "~1"[bit], step[4]]);
             };
         };
 
@@ -2667,12 +2657,6 @@ JSTidyNode {
 
         ^steps.asArray;
     }
-
-    /*
-    string_to_interpreter { |ch|
-        ^thisProcess.interpreter.tryPerform(ch.asSymbol);
-    }
-    */
 }
 
 JSTidyPattern : JSTidyNode {
@@ -2685,7 +2669,7 @@ JSTidyPattern : JSTidyNode {
 }
 
 JSControlBus {
-    var <>bus, node, lastval, >purpose;
+    var <>bus, node, >purpose, <lastval;
 
     *new { |purpose|
         ^super.new.purpose_(purpose).bus_(Bus.control(Server.default, 1))
@@ -2707,19 +2691,11 @@ JSControlBus {
             Server.default.bind { 
                 Synth(\controlbus, [out: bus, val: val, sec: sec])
             };
-            /*
-            Server.default.bind {
-                node = Synth(
-                    \controlbus,
-                    [out: bus, val: val, sec: sec],
-                    node,
-                    if(node.isNil, \addToTail, \addReplace)
-                );
-            };
-            */
             lastval = val;
         }
     }
+
+    get { ^bus.getSynchronous }
 }
 
 JSTidyException : Exception {
@@ -2901,6 +2877,8 @@ JSPlugin {
 // (run <samples> <rate> <lo> <hi>)   : generate values
 // (pulse <samples> <rate> <lo> <hi>) : make pulsewave
 // (sine <samples> <rate> <lo> <hi>)  : make sinewave
+// TODO: (rand <samples> <rate> <lo> <hi>) : random step signal
+// TODO: this should generate a sub-tree with 4 nodes!
 JSPluginPatternTags : JSPlugin {
     sine { |samples, rate, lo, hi|
         var pat;
@@ -2941,7 +2919,6 @@ JSPluginPatternTags : JSPlugin {
         tags.do { |tag|
             var samples, rate, lo, hi, i, j, patty;
 
-            //pattern.debug(tag++"before");
             i = pattern.find("("++tag);
             j = pattern.find(")", false, i ? 0);
             while { i.notNil and: j.notNil} {
@@ -2963,7 +2940,6 @@ JSPluginPatternTags : JSPlugin {
                 i = pattern.find("("++tag);
                 j = pattern.find(")", false, i ? 0);
             };
-            //pattern.debug(tag++"after");
         };
 
         ^pattern;
@@ -3085,8 +3061,8 @@ JSPluginStepSample : JSPlugin {
                 sustain = step.delta / tempo;
             };
 
-            if((step.at(\legato) ? 0) > 0.05) {
-                sustain = step.at(\legato) * step.dur / tempo;
+            if((step.at(\legato) ? 0) > 0) {
+                sustain = step.at(\legato) * step.dur / tempo; // in seconds
                 // used step.dur, because parallel notes may have delta=0
             };
 
@@ -3213,6 +3189,32 @@ JSPluginCycleFill : JSPlugin {
         };
 
         cycle.steps_(steps.asArray);
+        ^cycle;
+    }
+}
+
+// if a step has a value for the <length> keyword, then switch this
+// cycle to metric mode, where every step has the same length,
+// which equals the <length> setting (in cycles).
+// You can then make polymetric cycles.
+JSPluginCycleMetric : JSPlugin {
+    alter { |cycle, track|
+        var length;
+
+        // find first value for the <length> variable
+        cycle.steps.do { |step|
+            length ?? { length = step.at(\length) }
+        };
+
+        // if it was found: apply it
+        length !? { 
+            length = length.asFloat;
+            cycle.steps.do { |step| 
+                step.delta = length;
+                step.dur = length;
+            }
+        };
+
         ^cycle;
     }
 }
@@ -3354,7 +3356,7 @@ JSWave {
 
     bus { 
         if(this.asInteger.asSymbol == this) {
-            Tidy.effectTracks.at(this.asInteger - 1) !? { |track| ^track.bus };
+            Tidy.effectTracks.at(this) !? { |track| ^track.bus };
         };
         Tidy.controlTracks.at(this) !? { |track| ^track.bus };
         Tidy.audioTracks.at(this) !? { |track| ^track.bus };
@@ -3362,88 +3364,82 @@ JSWave {
 
     bus2 { 
         if(this.asInteger.asSymbol == this) {
-            Tidy.effectTracks.at(this.asInteger - 1) !? { |track| ^track.bus2 };
+            Tidy.effectTracks.at(this) !? { |track| ^track.bus2 };
         };
     }
 
-    gain { |newval|
-        var track = Tidy.audioTracks.at(this);
-        if(track.notNil) {
-            if(newval.isNil) { ^track.gain_bus.bus.getSynchronous };
-            track.gain_bus.bus.setSynchronous(newval.asFloat.clip(0, 1));
+    gain_bus {
+        Tidy.audioTracks.at(this) !? { |track| ^track.gain_bus };
+    }
+
+    mute_bus {
+        Tidy.audioTracks.at(this) !? { |track| ^track.mute_bus };
+    }
+
+    gain { |val, sec|
+        this.prGetOrCreateTrack;
+
+        Tidy.audioTracks.at(this) !? { |track|
+            var cur = track.gain_bus.get;
+
+            val !? {
+                track.gain_bus.set(val.asFloat.clip(0, 1), sec);
+            };
+
+            ^"%% (gain: %)".format("\\", this, cur.round(0.01)); 
         }
     }
 
-    /*
-    2025-08-18:
-
-    // audio rate reads stereo bus and writes it too
-
-    \1 -- { |in| ... }             // ar synth, addBefore if possible
-    \1 -- \synthdef                // ar synth, addBefore if possible
-    \a -- { |in| ... }             // ar synth, addToHead
-    \a -- \synthdef                // ar synth, addToHead
-    \a -- "delay 12 13" - "..."    // sequence params on synth (no def)
-    \a -- "def synthdef" - "n 12"  // sequence poly/mono notes (has def)
-
-    // control rate writes mono output bus
-
-    \val -- { |in| ... }          // kr synth, addToHead
-    \val -- \synthdef             // kr synth, addToHead
-    \val -- "mono" - "p1 1"       // sequence params on synth (no def)
-    \val -- "def adef" - "p1 1"   // sequence values on bus (has def)
-    \val -- "cv 3 5 6 7"          // sync write value to bus (has cv)
-
-    */
-
-    -- { |in|
+    prGetOrCreateTrack {
         var track;
 
+        case
+        { this.asInteger.asString == this.asString } { 
+            track = Tidy.effectTracks.at(this);
+            track ?? {
+                track = EffectTrack.new;
+                Tidy.effectTracks.put(this, track);
+            }
+        }
+        { this.asString.size > 1 } {
+            track = Tidy.controlTracks.at(this);
+            track ?? {
+                track = ControlTrack.new;
+                Tidy.controlTracks.put(this, track);
+            }
+        }
+        { 
+            track = Tidy.audioTracks.at(this);
+            track ?? {
+                track = AudioTrack.new;
+                Tidy.audioTracks.put(this, track);
+            }
+        };
+
+        ^track;
+    }
+
+    // returns a TreeBuilder
+    -- { |in|
         case
         { this == "".asSymbol }
         { ^TreeBuilder.new.status_(\build).add_branch("--").add_leaf(in) }
         {
-            case
-            { this.asInteger.asString == this.asString } { 
-                track = Tidy.effectTracks.at(this.asInteger - 1)
-            }
-            { this.asString.size > 1 } {
-                track = Tidy.controlTracks.at(this);
-                track ?? {
-                    track = ControlTrack.new;
-                    Tidy.controlTracks.put(this, track);
-                }
-            }
-            { 
-                track = Tidy.audioTracks.at(this);
-                track ?? {
-                    track = AudioTrack.new;
-                    Tidy.audioTracks.put(this, track);
-                }
-            };
+            var track = this.prGetOrCreateTrack;
 
             case
             { track.isNil } { 
-                ^"%% track nil".format("\\", this)
+                "%% track nil".format("\\", this);
             }
-            { in.isString } {
+            { in.isString or: in.isFunction or: (in.class == Symbol)} {
                 ^track
                 .newTreeBuilder
                 .status_(\build)
                 .add_branch("--")
                 .add_leaf(in)
             }
-            { in.isFunction or: (in.class == Symbol) }
-            { 
-                ^track
-                .launch(in)
-                .newTreeBuilder
-                .status_(\build)
-                .add_branch("--")
-                .add_leaf("_function_or_symbol 1")
-            }
 
-            { ^"%% -- <string or func or symbol>".format("\\", this) };
+            { "%% -- <string or func or symbol>".format("\\", this) };
         }
     }
 }
